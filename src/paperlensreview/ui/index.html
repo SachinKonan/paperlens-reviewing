@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>PaperLens Reviewing</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg: #fafaf7;
+    --fg: #232323;
+    --muted: #767676;
+    --accent: #1f6feb;
+    --accept: #1a7f37;
+    --reject: #cf222e;
+    --bar-bg: #e6e6e0;
+    --bar-fill: #1f6feb;
+    --err: #cf222e;
+    --card-bd: #d0d7de;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--fg);
+    margin: 0; padding: 0;
+  }
+  .wrap { max-width: 720px; margin: 60px auto; padding: 0 24px; }
+  h1 { font-size: 28px; margin: 0 0 8px 0; font-weight: 600; }
+  p.sub { color: var(--muted); margin: 0 0 24px 0; }
+  .card {
+    background: #fff; border: 1px solid var(--card-bd); border-radius: 8px;
+    padding: 20px; margin-bottom: 16px;
+  }
+  .upload {
+    display: flex; gap: 12px; align-items: center;
+  }
+  .upload input[type="file"] { flex: 1; }
+  button {
+    background: var(--accent); color: #fff; border: none; border-radius: 6px;
+    padding: 9px 16px; font-size: 14px; cursor: pointer; font-weight: 500;
+  }
+  button:disabled { opacity: 0.55; cursor: not-allowed; }
+  .stages { display: flex; gap: 8px; margin: 24px 0 14px 0; }
+  .stage {
+    flex: 1; text-align: center; padding: 8px 4px;
+    border: 1px solid var(--card-bd); border-radius: 6px;
+    font-size: 12px; color: var(--muted); background: #fff;
+    transition: all 150ms ease;
+  }
+  .stage.active {
+    color: var(--accent); border-color: var(--accent); font-weight: 600;
+    background: rgba(31,111,235,0.06);
+  }
+  .stage.done {
+    color: var(--accept); border-color: var(--accept);
+    background: rgba(26,127,55,0.06);
+  }
+  .bar {
+    width: 100%; height: 8px; background: var(--bar-bg); border-radius: 4px;
+    overflow: hidden;
+  }
+  .bar > div {
+    height: 100%; background: var(--bar-fill);
+    transition: width 250ms ease;
+  }
+  .verdict {
+    display: flex; align-items: center; gap: 12px;
+    padding: 16px; border-radius: 8px; border: 1px solid var(--card-bd);
+    margin-top: 12px;
+  }
+  .verdict.accept { background: rgba(26,127,55,0.06); border-color: var(--accept); }
+  .verdict.reject { background: rgba(207,34,46,0.06); border-color: var(--reject); }
+  .verdict h2 { margin: 0; font-size: 22px; font-weight: 600; }
+  .verdict.accept h2 { color: var(--accept); }
+  .verdict.reject h2 { color: var(--reject); }
+  .verdict .p { font-size: 14px; color: var(--muted); margin: 4px 0 0 0; }
+  .err {
+    background: rgba(207,34,46,0.07); border: 1px solid var(--reject);
+    padding: 12px; border-radius: 6px; color: var(--err);
+    white-space: pre-wrap; font-family: monospace; font-size: 13px;
+  }
+  .meta { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  details { margin-top: 12px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  details pre { background: #f4f4ee; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>PaperLens Reviewing</h1>
+<p class="sub">Upload a paper PDF — paperprep extracts the body + page images, then PaperLens scores the predicted acceptance probability.</p>
+
+<div class="card">
+  <div class="upload">
+    <input type="file" id="pdf" accept="application/pdf" />
+    <button id="submit">Submit</button>
+  </div>
+  <div class="meta" id="meta"></div>
+</div>
+
+<div id="progress" class="card" style="display:none">
+  <div class="stages" id="stages"></div>
+  <div class="bar"><div id="bar-fill" style="width:0%"></div></div>
+  <div class="meta" id="progress-meta"></div>
+</div>
+
+<div id="verdict-box" style="display:none"></div>
+
+</div>
+
+<script>
+const STAGES = ["mineru", "normalize", "filter", "export", "paperlens_score"];
+const STAGE_LABELS = {
+  mineru: "OCR (MinerU)",
+  normalize: "Normalize",
+  filter: "Filter",
+  export: "Export ShareGPT",
+  paperlens_score: "PaperLens score",
+};
+
+const $ = (id) => document.getElementById(id);
+const meta = $("meta");
+const progressMeta = $("progress-meta");
+const progressBox = $("progress");
+const bar = $("bar-fill");
+const stagesEl = $("stages");
+const verdictBox = $("verdict-box");
+
+function renderStages(currentIdx, state) {
+  stagesEl.innerHTML = "";
+  STAGES.forEach((s, i) => {
+    const cls = (state === "done") || (i < currentIdx) ? "done" : (i === currentIdx ? "active" : "");
+    const el = document.createElement("div");
+    el.className = "stage " + cls;
+    el.textContent = STAGE_LABELS[s] || s;
+    stagesEl.appendChild(el);
+  });
+}
+
+function renderVerdict(result) {
+  const cls = result.decision === "Accept" ? "accept" : "reject";
+  verdictBox.style.display = "block";
+  verdictBox.innerHTML = `
+    <div class="verdict ${cls}">
+      <div>
+        <h2>${result.decision}</h2>
+        <div class="p">p_accept = ${result.p_accept.toFixed(4)} &middot; ${result.modality} / ${result.domain}</div>
+      </div>
+    </div>
+    <details>
+      <summary>raw result</summary>
+      <pre>${JSON.stringify(result, null, 2)}</pre>
+    </details>
+  `;
+}
+
+function renderError(err) {
+  verdictBox.style.display = "block";
+  verdictBox.innerHTML = `<div class="err">${err}</div>`;
+}
+
+async function poll(job_id) {
+  let lastStage = null;
+  while (true) {
+    const r = await fetch(`/status/${job_id}`);
+    if (!r.ok) {
+      renderError(`status fetch failed: ${r.status} ${r.statusText}`);
+      return;
+    }
+    const s = await r.json();
+    const idx = Math.max(0, s.stage_index);
+    const total = s.total_stages || STAGES.length;
+    const pct = s.state === "done" ? 100 : Math.min(99, Math.round((idx / total) * 100));
+    bar.style.width = pct + "%";
+    renderStages(idx, s.state);
+    if (s.stage !== lastStage) {
+      progressMeta.textContent = `stage: ${s.stage || "queued"}  (${idx + 1}/${total})`;
+      lastStage = s.stage;
+    }
+    if (s.state === "done") {
+      bar.style.width = "100%";
+      renderVerdict(s.result);
+      return;
+    }
+    if (s.state === "error") {
+      renderError(s.error || "unknown error");
+      return;
+    }
+    await new Promise(r => setTimeout(r, 1500));
+  }
+}
+
+$("submit").addEventListener("click", async () => {
+  const f = $("pdf").files[0];
+  if (!f) { meta.textContent = "pick a PDF first"; return; }
+  meta.textContent = `uploading ${f.name} (${(f.size/1024).toFixed(1)} KB) ...`;
+  $("submit").disabled = true;
+  verdictBox.style.display = "none";
+  verdictBox.innerHTML = "";
+  progressBox.style.display = "block";
+
+  const body = new FormData();
+  body.append("file", f);
+  const r = await fetch("/submit", { method: "POST", body });
+  if (!r.ok) {
+    const t = await r.text();
+    renderError(`submit failed: ${r.status} ${t}`);
+    $("submit").disabled = false;
+    return;
+  }
+  const { job_id } = await r.json();
+  meta.textContent = `submitted job ${job_id}`;
+  await poll(job_id);
+  $("submit").disabled = false;
+});
+</script>
+</body>
+</html>

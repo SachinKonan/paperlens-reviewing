@@ -1,0 +1,38 @@
+# paperlensreview runtime config.
+
+server:
+  host: 0.0.0.0
+  port: 8003                          # paperlensreview UI + API
+
+# Upstream paperlens serve (paperlens-training-and-inference). Brings up
+# vLLM with the right ckpt; we just POST sharegpt rows.
+paperlens_serve:
+  base_url: http://localhost:8002
+  timeout_seconds: 600.0
+
+# paperprep is invoked as a subprocess (no daemon). We need the python that
+# has the paperprep package installed + the texlive binaries for the rare
+# latex_dir input (PDF input skips compile entirely).
+paperprep:
+  # Working tree of the paperprep submodule. If `paperprep` is on PATH via
+  # `pip install -e <path>`, just leave python_bin/paperprep_module empty.
+  python_bin: ""                       # e.g. /scratch/.../paperprep/.venv/bin/python
+  paperprep_module: paperprep         # the console_script's module entry
+  # Output staging for each submitted PDF (one subdir per job_id).
+  work_dir: ./paperlensreview_work
+  # PDF input: skip the compile stage. Stages to run on each upload:
+  stages: mineru,normalize,filter,export
+  # Stage knobs (mirrors paperprep run flags).
+  max_pages: 14
+  dpi: 150
+  min_body_pages: 6
+  # If your local paperprep needs latex (latex_dir uploads), set this:
+  texlive_bin: ""
+
+# Choose which modality to score with. RANKER.md / our deployment uses
+# vision; text is faster but lower-signal.
+review:
+  modality: vision                    # text | vision
+  domain: arxiv                       # arxiv | iclr (drives the prompt)
+
+logging: {level: INFO}
