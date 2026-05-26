@@ -1,4 +1,4 @@
-"""Pre-flight checks: NVIDIA GPU, ports, paperprep CLI presence."""
+"""Pre-flight checks: NVIDIA GPU, ports, upstream HTTP health."""
 from __future__ import annotations
 
 import logging
@@ -54,38 +54,21 @@ def check_port_free(host: str, port: int) -> CheckResult:
         return CheckResult(f"port-{port}-free", False, f"{host}:{port} already in use: {e}")
 
 
-def check_paperprep_cli(paperprep_module: str = "paperprep", python_bin: Optional[str] = None) -> CheckResult:
-    """Verify `paperprep run --help` runs cleanly so subprocess invocations
-    have a real chance of working.
+def check_url_health(url: str, timeout: float = 3.0, path: str = "/health") -> CheckResult:
+    """GET <url><path> and return ok if 200 + a JSON body.
+
+    paperlens-serve exposes /health (FastAPI), paperprep-serve exposes /healthz
+    (Flask), so callers pass the right path.
     """
-    cmd: list[str]
-    if python_bin:
-        cmd = [python_bin, "-m", paperprep_module, "run", "--help"]
-    else:
-        cmd = [paperprep_module, "run", "--help"]
-    try:
-        out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True, timeout=15)
-    except FileNotFoundError:
-        return CheckResult("paperprep-cli", False, f"binary not found: {cmd[0]}")
-    except subprocess.CalledProcessError as e:
-        return CheckResult("paperprep-cli", False, f"paperprep run --help failed: {e.output.strip()[:200]}")
-    except subprocess.TimeoutExpired:
-        return CheckResult("paperprep-cli", False, "paperprep run --help timed out")
-    if "paperprep run" not in out and "Run the end-to-end pipeline" not in out:
-        return CheckResult("paperprep-cli", False, f"paperprep --help output unexpected: {out[:200]}")
-    return CheckResult("paperprep-cli", True, "paperprep CLI present")
-
-
-def check_url_health(url: str, timeout: float = 3.0) -> CheckResult:
-    """GET <url>/health and return ok if 200 + a JSON body."""
     import requests
+    full = url.rstrip("/") + path
     try:
-        r = requests.get(url.rstrip("/") + "/health", timeout=timeout)
+        r = requests.get(full, timeout=timeout)
         if r.status_code == 200:
             try:
-                return CheckResult(f"{url}-health", True, str(r.json()))
+                return CheckResult(f"{full}", True, str(r.json()))
             except Exception:
-                return CheckResult(f"{url}-health", True, r.text[:120])
-        return CheckResult(f"{url}-health", False, f"HTTP {r.status_code}")
+                return CheckResult(f"{full}", True, r.text[:120])
+        return CheckResult(f"{full}", False, f"HTTP {r.status_code}")
     except Exception as e:
-        return CheckResult(f"{url}-health", False, f"{e}")
+        return CheckResult(f"{full}", False, f"{e}")

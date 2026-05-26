@@ -16,6 +16,9 @@
     --bar-fill: #1f6feb;
     --err: #cf222e;
     --card-bd: #d0d7de;
+    --code-bg: #f4f4ee;
+    --hover-bg: #eef2f7;
+    --selected-bg: rgba(31,111,235,0.12);
   }
   * { box-sizing: border-box; }
   body {
@@ -23,7 +26,8 @@
     background: var(--bg); color: var(--fg);
     margin: 0; padding: 0;
   }
-  .wrap { max-width: 720px; margin: 60px auto; padding: 0 24px; }
+  .wrap { max-width: 720px; margin: 60px auto; padding: 0 24px; transition: max-width 200ms ease; }
+  .wrap.wide { max-width: 1320px; }
   h1 { font-size: 28px; margin: 0 0 8px 0; font-weight: 600; }
   p.sub { color: var(--muted); margin: 0 0 24px 0; }
   .card {
@@ -81,11 +85,84 @@
   .meta { color: var(--muted); font-size: 12px; margin-top: 10px; }
   details { margin-top: 12px; }
   details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
-  details pre { background: #f4f4ee; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px; }
+  details pre { background: var(--code-bg); padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px; }
+
+  /* ----- post-result tabs / explorer / payload ----- */
+  .tabs {
+    display: flex; gap: 4px; border-bottom: 1px solid var(--card-bd);
+    margin: 0 -20px 16px -20px; padding: 0 20px;
+  }
+  .tab {
+    background: transparent; color: var(--muted); border: none;
+    padding: 10px 16px; font-size: 14px; cursor: pointer;
+    border-bottom: 2px solid transparent; border-radius: 0;
+    margin-bottom: -1px;
+  }
+  .tab.active {
+    color: var(--accent); border-bottom-color: var(--accent); font-weight: 600;
+  }
+  .tab:hover:not(.active) { color: var(--fg); background: var(--hover-bg); }
+  .pane { display: none; }
+  .pane.active { display: block; }
+
+  .explorer { display: grid; grid-template-columns: 320px 1fr; gap: 0; min-height: 520px; }
+  .explorer-tree {
+    border-right: 1px solid var(--card-bd);
+    padding-right: 12px; overflow-y: auto;
+    max-height: 720px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+  }
+  .explorer-tree .root-label {
+    font-weight: 600; color: var(--accent); margin: 8px 0 4px 0;
+    font-family: -apple-system, sans-serif;
+  }
+  .tree-node {
+    cursor: pointer; padding: 2px 6px; border-radius: 3px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    display: block;
+  }
+  .tree-node:hover { background: var(--hover-bg); }
+  .tree-node.selected { background: var(--selected-bg); color: var(--accent); font-weight: 600; }
+  .tree-node.dir { color: var(--fg); }
+  .tree-node.file { color: var(--muted); }
+  .tree-node.truncated { color: var(--reject); font-style: italic; }
+  .tree-children { margin-left: 14px; border-left: 1px dashed var(--card-bd); padding-left: 6px; }
+  .explorer-view {
+    padding-left: 16px; overflow: auto;
+    max-height: 720px;
+  }
+  .explorer-view .empty { color: var(--muted); font-size: 13px; margin-top: 20px; }
+  .explorer-view img { max-width: 100%; height: auto; border: 1px solid var(--card-bd); border-radius: 4px; }
+  .explorer-view iframe { width: 100%; height: 680px; border: 1px solid var(--card-bd); border-radius: 4px; }
+  .explorer-view pre {
+    background: var(--code-bg); padding: 12px; border-radius: 4px;
+    overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-word;
+    max-height: 680px;
+  }
+  .filename-bar {
+    font-family: ui-monospace, monospace; font-size: 11px;
+    color: var(--muted); margin-bottom: 8px; padding-bottom: 6px;
+    border-bottom: 1px dashed var(--card-bd);
+    word-break: break-all;
+  }
+  .filename-bar .name { color: var(--fg); font-weight: 600; }
+
+  .payload-section { margin-bottom: 18px; }
+  .payload-section h3 { font-size: 13px; margin: 0 0 6px 0; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .payload-section pre {
+    background: var(--code-bg); padding: 12px; border-radius: 4px;
+    font-size: 12px; white-space: pre-wrap; word-break: break-word;
+    max-height: 320px; overflow: auto;
+  }
+  .image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+  .image-grid figure { margin: 0; }
+  .image-grid img { width: 100%; height: 140px; object-fit: contain; background: var(--code-bg); border: 1px solid var(--card-bd); border-radius: 4px; }
+  .image-grid figcaption { font-size: 11px; color: var(--muted); text-align: center; margin-top: 2px; }
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="wrap" id="wrap">
 
 <h1>PaperLens Reviewing</h1>
 <p class="sub">Upload a paper PDF — paperprep extracts the body + page images, then PaperLens scores the predicted acceptance probability.</p>
@@ -109,13 +186,14 @@
 </div>
 
 <script>
-const STAGES = ["mineru", "normalize", "filter", "export", "paperlens_score"];
+let STAGES = ["paperprep", "paperlens_score"];
 const STAGE_LABELS = {
+  paperprep: "paperprep (mineru + normalize + filter + export)",
+  paperlens_score: "PaperLens score",
   mineru: "OCR (MinerU)",
   normalize: "Normalize",
   filter: "Filter",
   export: "Export ShareGPT",
-  paperlens_score: "PaperLens score",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -125,6 +203,7 @@ const progressBox = $("progress");
 const bar = $("bar-fill");
 const stagesEl = $("stages");
 const verdictBox = $("verdict-box");
+const wrap = $("wrap");
 
 function renderStages(currentIdx, state) {
   stagesEl.innerHTML = "";
@@ -137,27 +216,216 @@ function renderStages(currentIdx, state) {
   });
 }
 
-function renderVerdict(result) {
-  const cls = result.decision === "Accept" ? "accept" : "reject";
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[c]);
+}
+
+function fmtSize(n) {
+  if (n == null) return "";
+  if (n < 1024) return n + " B";
+  if (n < 1024*1024) return (n/1024).toFixed(1) + " KB";
+  return (n/(1024*1024)).toFixed(2) + " MB";
+}
+
+async function renderVerdict(jobId, result) {
+  wrap.classList.add("wide");
   verdictBox.style.display = "block";
+  const cls = result.decision === "Accept" ? "accept" : "reject";
   verdictBox.innerHTML = `
-    <div class="verdict ${cls}">
-      <div>
-        <h2>${result.decision}</h2>
-        <div class="p">p_accept = ${result.p_accept.toFixed(4)} &middot; ${result.modality} / ${result.domain}</div>
+    <div class="card">
+      <div class="tabs">
+        <button class="tab active" data-tab="verdict">Verdict</button>
+        <button class="tab" data-tab="files">Files</button>
+        <button class="tab" data-tab="paperlens">PaperLens input</button>
+      </div>
+      <div class="pane active" id="pane-verdict">
+        <div class="verdict ${cls}">
+          <div>
+            <h2>${result.decision}</h2>
+            <div class="p">p_accept = ${result.p_accept.toFixed(4)} &middot; ${result.modality} / ${result.domain}</div>
+          </div>
+        </div>
+        <details><summary>raw result</summary><pre>${esc(JSON.stringify(result, null, 2))}</pre></details>
+      </div>
+      <div class="pane" id="pane-files">
+        <div class="explorer">
+          <div class="explorer-tree" id="explorer-tree"><em>loading…</em></div>
+          <div class="explorer-view" id="explorer-view"><div class="empty">Pick a file in the tree.</div></div>
+        </div>
+      </div>
+      <div class="pane" id="pane-paperlens">
+        <div class="empty">loading…</div>
       </div>
     </div>
-    <details>
-      <summary>raw result</summary>
-      <pre>${JSON.stringify(result, null, 2)}</pre>
-    </details>
   `;
+  // Tab wiring
+  verdictBox.querySelectorAll(".tab").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      verdictBox.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b === btn));
+      const which = btn.dataset.tab;
+      verdictBox.querySelectorAll(".pane").forEach(p => p.classList.toggle("active", p.id === `pane-${which}`));
+    });
+  });
+  // Lazy-load tree + payload
+  loadTree(jobId).catch(e => $("explorer-tree").innerHTML = `<div class="err">${esc(String(e))}</div>`);
+  loadPayload(jobId).catch(e => $("pane-paperlens").innerHTML = `<div class="err">${esc(String(e))}</div>`);
 }
 
 function renderError(err) {
   verdictBox.style.display = "block";
-  verdictBox.innerHTML = `<div class="err">${err}</div>`;
+  verdictBox.innerHTML = `<div class="err">${esc(err)}</div>`;
 }
+
+/* ---------------- file explorer ---------------- */
+
+async function loadTree(jobId) {
+  const r = await fetch(`/jobs/${jobId}/tree`);
+  if (!r.ok) throw new Error(`tree fetch failed: ${r.status}`);
+  const tree = await r.json();
+  const treeEl = $("explorer-tree");
+  treeEl.innerHTML = "";
+  for (const [label, node] of Object.entries(tree)) {
+    const head = document.createElement("div");
+    head.className = "root-label";
+    head.textContent = label + "/";
+    treeEl.appendChild(head);
+    treeEl.appendChild(renderNode(node, jobId, /*topLevel=*/true));
+  }
+}
+
+function renderNode(node, jobId, topLevel = false) {
+  const div = document.createElement("div");
+  if (node.type === "truncated") {
+    const t = document.createElement("span");
+    t.className = "tree-node truncated";
+    t.textContent = "… (truncated)";
+    div.appendChild(t);
+    return div;
+  }
+  const row = document.createElement("span");
+  row.className = "tree-node " + (node.type === "dir" ? "dir" : "file");
+  const icon = node.type === "dir" ? "📁" : "📄";
+  row.textContent = `${icon} ${node.name}${node.type === "dir" ? "/" : ""}${node.size != null ? "  (" + fmtSize(node.size) + ")" : ""}`;
+  div.appendChild(row);
+  if (node.type === "dir" && node.children) {
+    const kids = document.createElement("div");
+    kids.className = "tree-children";
+    if (!topLevel) kids.style.display = "none";
+    for (const c of node.children) kids.appendChild(renderNode(c, jobId));
+    div.appendChild(kids);
+    row.addEventListener("click", (e) => {
+      e.stopPropagation();
+      kids.style.display = kids.style.display === "none" ? "block" : "none";
+    });
+  } else if (node.type === "file") {
+    row.addEventListener("click", (e) => {
+      e.stopPropagation();
+      document.querySelectorAll(".tree-node.selected").forEach(n => n.classList.remove("selected"));
+      row.classList.add("selected");
+      openFile(jobId, node.path, node.name);
+    });
+  } else if (node.type === "missing") {
+    row.textContent = `⚠️ ${node.name} (missing)`;
+    row.classList.add("truncated");
+  }
+  return div;
+}
+
+async function openFile(jobId, path, name) {
+  const view = $("explorer-view");
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  const url = `/jobs/${jobId}/file?path=${encodeURIComponent(path)}`;
+  const head = `<div class="filename-bar"><span class="name">${esc(name)}</span> &nbsp; ${esc(path)}</div>`;
+  if (["png", "jpg", "jpeg", "gif", "webp"].includes(ext)) {
+    view.innerHTML = head + `<img src="${url}" />`;
+    return;
+  }
+  if (ext === "pdf") {
+    view.innerHTML = head + `<iframe src="${url}"></iframe>`;
+    return;
+  }
+  // Fetch and render as text/JSON/markdown
+  view.innerHTML = head + `<div class="empty">loading…</div>`;
+  const r = await fetch(url);
+  if (!r.ok) { view.innerHTML = head + `<div class="err">${esc("fetch failed: " + r.status)}</div>`; return; }
+  const txt = await r.text();
+  if (ext === "json" || ext === "jsonl") {
+    try {
+      // jsonl: each line is a record; show as array
+      let body = txt;
+      if (ext === "jsonl") {
+        const recs = txt.split(/\n+/).filter(Boolean).map(l => JSON.parse(l));
+        body = JSON.stringify(recs, null, 2);
+      } else {
+        body = JSON.stringify(JSON.parse(txt), null, 2);
+      }
+      view.innerHTML = head + `<pre>${esc(body)}</pre>`;
+    } catch (e) {
+      view.innerHTML = head + `<pre>${esc(txt)}</pre>`;
+    }
+    return;
+  }
+  view.innerHTML = head + `<pre>${esc(txt)}</pre>`;
+}
+
+/* ---------------- paperlens-input view ---------------- */
+
+async function loadPayload(jobId) {
+  const r = await fetch(`/jobs/${jobId}/payload`);
+  if (!r.ok) throw new Error(`payload fetch failed: ${r.status}`);
+  const pl = await r.json();
+  const pane = $("pane-paperlens");
+  const row = pl.row || {};
+  const convs = row.conversations || [];
+  const sys = (convs.find(c => c.from === "system") || {}).value || "";
+  const human = (convs.find(c => c.from === "human") || {}).value || "";
+  const gpt = (convs.find(c => c.from === "gpt") || {}).value || "";
+  const images = row.images || [];
+
+  let imgsHtml = "";
+  if (images.length) {
+    imgsHtml = `<div class="image-grid">` + images.map((p, i) => {
+      const url = `/jobs/${jobId}/file?path=${encodeURIComponent(p)}`;
+      return `<figure><img src="${url}" /><figcaption>${esc(p.split("/").pop())}</figcaption></figure>`;
+    }).join("") + `</div>`;
+  } else {
+    imgsHtml = `<div class="empty">No images in this row (text modality).</div>`;
+  }
+
+  pane.innerHTML = `
+    <div class="payload-section">
+      <h3>Summary</h3>
+      <pre>modality: ${esc(pl.modality)}
+sharegpt_path: ${esc(pl.sharegpt_path)}
+n_images: ${images.length}
+metadata: ${esc(JSON.stringify(row._metadata || {}, null, 2))}</pre>
+    </div>
+    <div class="payload-section">
+      <h3>Images (${images.length})</h3>
+      ${imgsHtml}
+    </div>
+    <div class="payload-section">
+      <h3>System prompt</h3>
+      <pre>${esc(sys)}</pre>
+    </div>
+    <div class="payload-section">
+      <h3>Human turn  (the actual model input — text + &lt;image&gt; tags)</h3>
+      <pre>${esc(human)}</pre>
+    </div>
+    <div class="payload-section">
+      <h3>Placeholder assistant turn  (appended by paperlensreview for LF's ppo stage)</h3>
+      <pre>${esc(gpt)}</pre>
+    </div>
+    <details>
+      <summary>raw sharegpt row JSON</summary>
+      <pre>${esc(JSON.stringify(row, null, 2))}</pre>
+    </details>
+  `;
+}
+
+/* ---------------- polling ---------------- */
 
 async function poll(job_id) {
   let lastStage = null;
@@ -179,7 +447,7 @@ async function poll(job_id) {
     }
     if (s.state === "done") {
       bar.style.width = "100%";
-      renderVerdict(s.result);
+      await renderVerdict(job_id, s.result);
       return;
     }
     if (s.state === "error") {
@@ -197,6 +465,7 @@ $("submit").addEventListener("click", async () => {
   $("submit").disabled = true;
   verdictBox.style.display = "none";
   verdictBox.innerHTML = "";
+  wrap.classList.remove("wide");
   progressBox.style.display = "block";
 
   const body = new FormData();
@@ -208,9 +477,10 @@ $("submit").addEventListener("click", async () => {
     $("submit").disabled = false;
     return;
   }
-  const { job_id } = await r.json();
-  meta.textContent = `submitted job ${job_id}`;
-  await poll(job_id);
+  const resp = await r.json();
+  if (Array.isArray(resp.stages) && resp.stages.length) STAGES = resp.stages;
+  meta.textContent = `submitted job ${resp.job_id}`;
+  await poll(resp.job_id);
   $("submit").disabled = false;
 });
 </script>

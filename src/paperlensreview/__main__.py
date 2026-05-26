@@ -35,25 +35,29 @@ def _add_serve(sub: argparse._SubParsersAction) -> None:
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
+    import os
     from omegaconf import OmegaConf
     from .checks import (
-        CheckResult, check_nvidia_gpu, check_paperprep_cli,
+        CheckResult, check_nvidia_gpu,
         check_port_free, check_url_health,
     )
     from .server import run_uvicorn
 
     cfg = OmegaConf.load(args.config)
+    # Allow the launcher to override upstream URLs when it picks dynamic ports;
+    # without this, the reviewing server would hit stale base_urls.
+    if (env := os.environ.get("PAPERLENS_SERVE_BASE_URL")):
+        cfg.paperlens_serve.base_url = env
+    if (env := os.environ.get("PAPERPREP_SERVE_BASE_URL")):
+        cfg.paperprep_serve.base_url = env
     host = args.host or cfg.server.host
     port = args.port or int(cfg.server.port)
 
     if not args.skip_preflight:
         results: list[CheckResult] = [
             check_nvidia_gpu(),
-            check_paperprep_cli(
-                cfg.paperprep.paperprep_module,
-                python_bin=(cfg.paperprep.python_bin or None),
-            ),
-            check_url_health(cfg.paperlens_serve.base_url),
+            check_url_health(cfg.paperlens_serve.base_url, path="/health"),
+            check_url_health(cfg.paperprep_serve.base_url, path="/healthz"),
             check_port_free(host, port),
         ]
         fails = [r for r in results if not r.ok]
@@ -63,7 +67,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         if fails:
             print(
                 "\nPre-flight FAILED. Address the above and retry.\n"
-                "Tip: scripts/launch_local.sh starts paperlens-serve first.",
+                "Tip: scripts/launch_local.sh starts paperprep-serve + paperlens-serve first.",
                 file=sys.stderr,
             )
             return 2

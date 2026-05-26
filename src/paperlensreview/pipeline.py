@@ -1,25 +1,22 @@
-"""Per-PDF pipeline: paperprep (subprocess) -> paperlens serve /score.
+"""Per-PDF pipeline: paperprep serve /prepare -> paperlens serve /score.
 
-One job_id -> one subdir under ``cfg.paperprep.work_dir/<job_id>/``. Inside:
+One job_id -> one subdir under ``cfg.paperprep_serve.work_dir/<job_id>/``. Inside:
 
-  uploaded.pdf                       raw upload
-  manifest.jsonl                     paperprep input manifest (1 line: type=pdf)
-  state.jsonl                        paperprep state log (one row per stage,paper)
-  sharegpt/{text,vision}/data.json   paperprep export output
-  pipeline.log                       captured stdout+stderr of paperprep subprocess
-  result.json                        final verdict ({decision, p_accept, ...})
+  <job_id>.pdf       raw upload (path we hand to paperprep over the wire)
+  result.json        final verdict ({decision, p_accept, ...})
 
-The UI polls ``status(job_id)`` which inspects state.jsonl + result.json to
-compute the current stage and progress. Each stage runs to completion before
-the next starts; we don't need a streaming protocol.
+The paperprep serve daemon owns its own output_dir (per-request subdirs hold
+the compile/mineru/normalize/filter/export artifacts). We don't touch those;
+we read the absolute ``sharegpt_vision_path`` / ``sharegpt_text_path`` it
+returns and POST a single row to paperlens serve /score.
+
+Both upstream services are persistent FastAPI/Flask daemons -- launch_local.sh
+brings them up and waits for /healthz before exec'ing the reviewing server.
 """
 from __future__ import annotations
 
 import json
 import logging
-import shlex
-import shutil
-import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
@@ -32,9 +29,10 @@ import requests
 log = logging.getLogger(__name__)
 
 
-# Stage order = paperprep stages we run + the final paperlens scoring step.
-# Compile is skipped for PDF input (paperprep auto-skips type=pdf entries).
-STAGES: list[str] = ["mineru", "normalize", "filter", "export", "paperlens_score"]
+# Two coarse stages: paperprep serve runs synchronously and only returns when
+# its internal compile/mineru/normalize/filter/export chain is done, so we
+# can't show fine-grained progress for it without modifying paperprep itself.
+STAGES: list[str] = ["paperprep", "paperlens_score"]
 
 
 @dataclass
@@ -88,98 +86,65 @@ class JobRegistry:
 
 
 # ---------------------------------------------------------------------------
-# Pipeline runner
+# Stage transition helper
 # ---------------------------------------------------------------------------
 
-def _paperprep_cmd(cfg, job_dir: Path) -> list[str]:
-    """Build the paperprep CLI invocation."""
-    base: list[str]
-    if cfg.paperprep.python_bin:
-        base = [cfg.paperprep.python_bin, "-m", cfg.paperprep.paperprep_module, "run"]
-    else:
-        base = [cfg.paperprep.paperprep_module, "run"]
-    args = [
-        *base,
-        "--input-manifest", str(job_dir / "manifest.jsonl"),
-        "--output-dir", str(job_dir),
-        "--stages", str(cfg.paperprep.stages),
-        "--max-pages", str(int(cfg.paperprep.max_pages)),
-        "--dpi", str(int(cfg.paperprep.dpi)),
-        "--min-body-pages", str(int(cfg.paperprep.min_body_pages)),
-    ]
-    if cfg.paperprep.texlive_bin:
-        args += ["--texlive-bin", str(cfg.paperprep.texlive_bin)]
-    return args
+def _enter_stage(status: JobStatus, stage: str, via: str = "transition") -> None:
+    status.stage = stage
+    try:
+        status.stage_index = STAGES.index(stage)
+    except ValueError:
+        status.stage_index = len(STAGES)
+    status.stage_log.append({"t": time.time(), "stage": stage, "via": via})
 
 
-def _walk_state_jsonl(state_path: Path) -> dict[str, str]:
-    """Return {stage_name: latest_status} from paperprep's state.jsonl."""
-    out: dict[str, str] = {}
-    if not state_path.exists():
-        return out
-    with state_path.open() as f:
-        for line in f:
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            stage = row.get("stage")
-            status = row.get("status")
-            if stage and status:
-                # Latest wins (resume-safe)
-                out[stage] = status
-    return out
+# ---------------------------------------------------------------------------
+# paperprep serve client
+# ---------------------------------------------------------------------------
 
+def _call_paperprep_prepare(cfg, job_id: str, pdf_path: Path) -> dict:
+    """POST one PDF to paperprep serve /prepare. Returns the response dict.
 
-def _stage_progress_watcher(job_dir: Path, status: JobStatus, stop_evt: threading.Event) -> None:
-    """Background poller: while paperprep runs, watch state.jsonl and update
-    ``status.stage`` / ``status.stage_index`` based on the latest stage with
-    an "ok" row. Cheap (poll every 1s).
+    paperprep serve writes its outputs under its own output_dir (configured at
+    daemon launch). The response has absolute paths to the ShareGPT exports we
+    then forward to paperlens-serve.
     """
-    state_path = job_dir / "state.jsonl"
-    paperprep_stages = STAGES[:-1]   # exclude paperlens_score (we drive that separately)
-    last_seen: Optional[str] = None
-    while not stop_evt.wait(1.0):
-        states = _walk_state_jsonl(state_path)
-        # Find the LATEST completed stage in our ordered list
-        latest_ok = None
-        for s in paperprep_stages:
-            if states.get(s) == "ok":
-                latest_ok = s
-        # The "current" stage = next stage after latest_ok
-        if latest_ok is None:
-            cur = paperprep_stages[0]   # haven't completed anything yet -> running first
-            cur_idx = 0
-        else:
-            i = paperprep_stages.index(latest_ok)
-            cur_idx = min(i + 1, len(paperprep_stages) - 1)
-            cur = paperprep_stages[cur_idx]
-        if cur != last_seen:
-            status.stage = cur
-            status.stage_index = cur_idx
-            status.stage_log.append({"t": time.time(), "stage": cur, "via": "paperprep_state"})
-            last_seen = cur
+    url = cfg.paperprep_serve.base_url.rstrip("/") + "/prepare"
+    payload = {
+        "request_id": job_id,
+        "papers": [
+            {"id": job_id, "type": "pdf", "path": str(pdf_path)},
+        ],
+    }
+    timeout = float(cfg.paperprep_serve.timeout_seconds)
+    r = requests.post(url, json=payload, timeout=timeout)
+    if r.status_code >= 500:
+        raise RuntimeError(f"paperprep serve {r.status_code}: {r.text[:400]}")
+    r.raise_for_status()
+    body = r.json()
+    if not isinstance(body, dict):
+        raise RuntimeError(f"paperprep serve returned non-dict body: {body!r}")
+    return body
 
 
-def _write_manifest(pdf_path: Path, job_dir: Path, job_id: str) -> Path:
-    """Write the 1-line paperprep input manifest pointing at the uploaded PDF."""
-    mf = job_dir / "manifest.jsonl"
-    mf.write_text(json.dumps({"id": job_id, "type": "pdf", "path": str(pdf_path)}) + "\n")
-    return mf
-
-
-def _load_sharegpt_export(job_dir: Path, modality: str) -> Optional[dict]:
-    """Read the first sharegpt row from paperprep's export. Returns the row
-    dict ready to POST to paperlens serve /score, or None if missing/empty.
+def _load_sharegpt_export(prepare_body: dict, modality: str) -> Optional[dict]:
+    """Resolve which sharegpt_{modality}_path to read from paperprep's response,
+    load the first row, and append a placeholder gpt turn so LF's 'ppo' stage
+    accepts it at inference time. Returns None on any miss.
     """
-    p = job_dir / "sharegpt" / modality / "data.json"
-    if not p.exists():
-        log.warning(f"sharegpt export missing: {p}")
+    key = f"sharegpt_{modality}_path"
+    sg_path_str = prepare_body.get(key)
+    if not sg_path_str:
+        log.warning("paperprep prepare body missing %s: %r", key, prepare_body)
+        return None
+    sg_path = Path(sg_path_str)
+    if not sg_path.exists():
+        log.warning("paperprep sharegpt export path doesn't exist: %s", sg_path)
         return None
     try:
-        rows = json.loads(p.read_text())
+        rows = json.loads(sg_path.read_text())
     except Exception as e:
-        log.warning(f"sharegpt parse failed: {e}")
+        log.warning("paperprep sharegpt parse failed (%s): %s", sg_path, e)
         return None
     if not rows:
         return None
@@ -194,6 +159,10 @@ def _load_sharegpt_export(job_dir: Path, modality: str) -> Optional[dict]:
     row["conversations"] = convs
     return row
 
+
+# ---------------------------------------------------------------------------
+# paperlens serve client
+# ---------------------------------------------------------------------------
 
 def _score_via_paperlens(cfg, sharegpt_row: dict) -> dict:
     """POST one sharegpt row to paperlens serve /score, return its
@@ -213,6 +182,10 @@ def _decision_from_p_accept(p_accept: float, threshold: float = 0.5) -> str:
     return "Accept" if p_accept >= threshold else "Reject"
 
 
+# ---------------------------------------------------------------------------
+# Main job entry point
+# ---------------------------------------------------------------------------
+
 def run_job(cfg, status: JobStatus, work_dir: Path, pdf_bytes: bytes, pdf_name: str) -> None:
     """End-to-end job. Writes ``result.json`` on success; sets ``status.error``
     on failure. Designed to be called inside a thread.
@@ -221,50 +194,38 @@ def run_job(cfg, status: JobStatus, work_dir: Path, pdf_bytes: bytes, pdf_name: 
     job_dir = work_dir / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
 
-    # Persist the uploaded PDF
     pdf_path = job_dir / f"{job_id}.pdf"
     pdf_path.write_bytes(pdf_bytes)
     log.info(f"[{job_id}] pdf saved -> {pdf_path} ({len(pdf_bytes)} bytes)")
 
-    _write_manifest(pdf_path, job_dir, job_id)
     status.state = "running"
     status.started_at = time.time()
-    status.stage = STAGES[0]
-    status.stage_index = 0
-
-    # Watcher thread updates status.stage/stage_index as paperprep emits state.jsonl rows
-    stop_evt = threading.Event()
-    watcher = threading.Thread(target=_stage_progress_watcher,
-                               args=(job_dir, status, stop_evt), daemon=True)
-    watcher.start()
+    _enter_stage(status, "paperprep")
 
     try:
-        # ---- run paperprep ----
-        cmd = _paperprep_cmd(cfg, job_dir)
-        log.info(f"[{job_id}] paperprep: {shlex.join(cmd)}")
-        with (job_dir / "pipeline.log").open("w") as lf:
-            r = subprocess.run(cmd, stdout=lf, stderr=subprocess.STDOUT,
-                               text=True, check=False)
-        if r.returncode != 0:
-            raise RuntimeError(f"paperprep exited {r.returncode}; see pipeline.log")
+        log.info(f"[{job_id}] paperprep serve /prepare ({cfg.paperprep_serve.base_url}, pdf={pdf_path})")
+        prepare_body = _call_paperprep_prepare(cfg, job_id, pdf_path)
 
-        states = _walk_state_jsonl(job_dir / "state.jsonl")
-        if states.get("export") != "ok":
-            failed_stages = {s: st for s, st in states.items() if st != "ok"}
+        # Validate the per-paper result before claiming success
+        papers = prepare_body.get("papers") or []
+        if not papers:
+            raise RuntimeError(f"paperprep prepare returned no papers: {prepare_body}")
+        p0 = papers[0]
+        if p0.get("status") != "ok":
             raise RuntimeError(
-                f"paperprep did not reach export=ok; latest states: {failed_stages or states}"
+                f"paperprep failed at paper level: status={p0.get('status')!r} "
+                f"error={p0.get('error')!r}"
             )
 
-        # ---- paperlens score ----
-        status.stage = "paperlens_score"
-        status.stage_index = len(STAGES) - 1
-        status.stage_log.append({"t": time.time(), "stage": "paperlens_score", "via": "transition"})
-
+        _enter_stage(status, "paperlens_score")
         modality = str(cfg.review.modality)
-        row = _load_sharegpt_export(job_dir, modality)
+        row = _load_sharegpt_export(prepare_body, modality)
         if row is None:
-            raise RuntimeError(f"paperprep export produced no {modality} sharegpt row")
-        log.info(f"[{job_id}] scoring via paperlens-serve {cfg.paperlens_serve.base_url} (modality={modality})")
+            raise RuntimeError(
+                f"paperprep prepare did not produce a {modality} sharegpt row; "
+                f"response keys={list(prepare_body.keys())}"
+            )
+        log.info(f"[{job_id}] paperlens serve /score ({cfg.paperlens_serve.base_url}, modality={modality})")
         score = _score_via_paperlens(cfg, row)
 
         result = {
@@ -277,6 +238,8 @@ def run_job(cfg, status: JobStatus, work_dir: Path, pdf_bytes: bytes, pdf_name: 
             "domain": str(cfg.review.domain),
             "pdf_name": pdf_name,
             "job_dir": str(job_dir),
+            "paperprep_output_dir": prepare_body.get("output_dir"),
+            "paperprep_elapsed_s": prepare_body.get("elapsed_s"),
         }
         (job_dir / "result.json").write_text(json.dumps(result, indent=2))
         status.result = result
@@ -289,6 +252,4 @@ def run_job(cfg, status: JobStatus, work_dir: Path, pdf_bytes: bytes, pdf_name: 
         status.state = "error"
         status.error = str(e)
     finally:
-        stop_evt.set()
-        watcher.join(timeout=2)
         status.finished_at = time.time()
