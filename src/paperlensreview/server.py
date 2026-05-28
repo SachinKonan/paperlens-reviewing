@@ -22,9 +22,14 @@ from typing import Any, Optional
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from omegaconf import OmegaConf
+from pydantic import BaseModel
 
 from .checks import check_url_health
-from .pipeline import JobRegistry, JobStatus, STAGES, run_job
+from . import latexsrc
+from .pipeline import (
+    JobRegistry, JobStatus, STAGES,
+    run_job, run_latex_job, run_latex_history_job,
+)
 
 
 log = logging.getLogger(__name__)
@@ -109,6 +114,112 @@ def submit(file: UploadFile = File(...)) -> dict:
     t = threading.Thread(target=_runner, daemon=True, name=f"job-{job_id}")
     t.start()
     return {"job_id": job_id, "stages": STAGES, "submitted_at": status.started_at}
+
+
+# --------- LaTeX-source input (local dir, optional git history) ---------
+
+class ProbeLatexReq(BaseModel):
+    path: str
+
+
+class SubmitLatexReq(BaseModel):
+    path: str
+    main_tex: Optional[str] = None
+    mode: str = "latest"               # "latest" (working tree) | "history"
+    commits: Optional[list[dict]] = None  # selected commits for history mode
+    n_window: int = 20                 # history default window (last N .tex commits)
+
+
+@app.post("/probe_latex")
+def probe_latex(req: ProbeLatexReq) -> dict:
+    """Inspect a local LaTeX dir: validate, suggest the entrypoint, list .tex
+    files, and (when git-tracked) return the last-N-commit .tex churn window so
+    the UI can render the history graph + pre-select commits above the 25th pct.
+    """
+    p = Path(req.path).expanduser()
+    if not p.exists():
+        raise HTTPException(400, f"path does not exist: {p}")
+    if not p.is_dir():
+        raise HTTPException(400, f"not a directory: {p}")
+    p = p.resolve()
+
+    info: dict[str, Any] = {
+        "ok": True,
+        "path": str(p),
+        "suggested_main_tex": latexsrc.find_main_tex(p),
+        "tex_files": latexsrc.list_tex_files(p),
+        "is_git": latexsrc.is_git_repo(p),
+    }
+    if not info["tex_files"]:
+        info["warning"] = "no .tex files found under this directory"
+    if info["is_git"]:
+        repo = latexsrc.git_toplevel(p) or p
+        info["git_toplevel"] = str(repo)
+        info["dirty"] = latexsrc.working_tree_dirty(repo)
+        try:
+            info["history"] = latexsrc.last_commits_with_tex_churn(repo, n=20)
+        except Exception as e:
+            info["history"] = None
+            info["history_error"] = str(e)
+    return info
+
+
+@app.post("/submit_latex")
+def submit_latex(req: SubmitLatexReq) -> dict:
+    """Kick off a LaTeX-source review. mode=latest scores the working tree as-is
+    (one verdict); mode=history scores each selected commit -> a p_accept
+    trajectory. Returns the job_id; the UI polls /status/{job_id}.
+    """
+    p = Path(req.path).expanduser()
+    if not p.is_dir():
+        raise HTTPException(400, f"not a directory: {req.path}")
+    p = p.resolve()
+    mode = req.mode if req.mode in ("latest", "history") else "latest"
+
+    if mode == "history":
+        if not latexsrc.is_git_repo(p):
+            raise HTTPException(400, f"history mode requires a git repo: {p}")
+        repo = latexsrc.git_toplevel(p) or p
+        commits = req.commits or []
+        if not commits:
+            # default selection: last-20 .tex commits above the 25th pct
+            commits = [c for c in latexsrc.last_commits_with_tex_churn(repo, n=req.n_window)["commits"]
+                       if c.get("above_p25")]
+        # validate / normalize each commit sha
+        norm: list[dict] = []
+        for c in commits:
+            sha = c.get("sha") if isinstance(c, dict) else c
+            if not sha:
+                continue
+            full = latexsrc.resolve_commit(repo, sha)
+            if not full:
+                raise HTTPException(400, f"unknown commit: {sha!r}")
+            norm.append({"sha": full, "short": full[:8],
+                         "date": (c.get("date") if isinstance(c, dict) else None),
+                         "subject": (c.get("subject") if isinstance(c, dict) else None),
+                         "churn": (c.get("churn") if isinstance(c, dict) else None)})
+        if not norm:
+            raise HTTPException(400, "history mode: no commits selected")
+
+    job_id = uuid.uuid4().hex[:12]
+    status = _state["jobs"].create(job_id)
+    log.info("[/submit_latex] job=%s path=%s mode=%s main_tex=%s n=%s",
+             job_id, p, mode, req.main_tex,
+             len(norm) if mode == "history" else 1)
+
+    def _runner():
+        with _state["job_lock"]:
+            if mode == "history":
+                run_latex_history_job(_state["cfg"], status, _state["work_dir"],
+                                      p, req.main_tex, norm)
+            else:
+                run_latex_job(_state["cfg"], status, _state["work_dir"],
+                              p, req.main_tex)
+
+    t = threading.Thread(target=_runner, daemon=True, name=f"job-{job_id}")
+    t.start()
+    return {"job_id": job_id, "stages": STAGES, "submitted_at": status.started_at,
+            "mode": mode}
 
 
 @app.get("/status/{job_id}")

@@ -102,20 +102,20 @@ def _enter_stage(status: JobStatus, stage: str, via: str = "transition") -> None
 # paperprep serve client
 # ---------------------------------------------------------------------------
 
-def _call_paperprep_prepare(cfg, job_id: str, pdf_path: Path) -> dict:
-    """POST one PDF to paperprep serve /prepare. Returns the response dict.
+def _call_paperprep_prepare(cfg, request_id: str, *, input_type: str,
+                            path: Path, main_tex: Optional[str] = None) -> dict:
+    """POST one paper (pdf or latex_dir) to paperprep serve /prepare.
 
     paperprep serve writes its outputs under its own output_dir (configured at
     daemon launch). The response has absolute paths to the ShareGPT exports we
-    then forward to paperlens-serve.
+    then forward to paperlens-serve. ``main_tex`` is an optional entrypoint hint
+    for latex_dir (paperprep auto-detects when omitted).
     """
     url = cfg.paperprep_serve.base_url.rstrip("/") + "/prepare"
-    payload = {
-        "request_id": job_id,
-        "papers": [
-            {"id": job_id, "type": "pdf", "path": str(pdf_path)},
-        ],
-    }
+    item = {"id": request_id, "type": input_type, "path": str(path)}
+    if input_type == "latex_dir" and main_tex:
+        item["main_tex"] = main_tex
+    payload = {"request_id": request_id, "papers": [item]}
     timeout = float(cfg.paperprep_serve.timeout_seconds)
     r = requests.post(url, json=payload, timeout=timeout)
     if r.status_code >= 500:
@@ -186,8 +186,52 @@ def _decision_from_p_accept(p_accept: float, threshold: float = 0.5) -> str:
 # Main job entry point
 # ---------------------------------------------------------------------------
 
+def _score_from_prepare(cfg, prepare_body: dict) -> dict:
+    """Validate the per-paper prepare result, load its sharegpt row, score it.
+
+    Returns the score-derived fields; raises on any failure. Shared by the PDF,
+    single-latex, and per-commit history paths.
+    """
+    papers = prepare_body.get("papers") or []
+    if not papers:
+        raise RuntimeError(f"paperprep prepare returned no papers: {prepare_body}")
+    p0 = papers[0]
+    if p0.get("status") != "ok":
+        raise RuntimeError(
+            f"paperprep failed at paper level: status={p0.get('status')!r} "
+            f"error={p0.get('error')!r}"
+        )
+    modality = str(cfg.review.modality)
+    row = _load_sharegpt_export(prepare_body, modality)
+    if row is None:
+        raise RuntimeError(
+            f"paperprep prepare did not produce a {modality} sharegpt row; "
+            f"response keys={list(prepare_body.keys())}"
+        )
+    score = _score_via_paperlens(cfg, row)
+    pa = float(score["p_accept"])
+    return {
+        "p_accept": pa,
+        "decision": _decision_from_p_accept(pa),
+        "logp_accept": score.get("logp_accept"),
+        "logp_reject": score.get("logp_reject"),
+        "pred": score.get("pred"),
+        "body_pages": p0.get("body_pages"),
+        "paperprep_output_dir": prepare_body.get("output_dir"),
+        "paperprep_elapsed_s": prepare_body.get("elapsed_s"),
+    }
+
+
+def _write_done(status: JobStatus, job_dir: Path, result: dict) -> None:
+    (job_dir / "result.json").write_text(json.dumps(result, indent=2))
+    status.result = result
+    status.state = "done"
+    status.stage = "done"
+    status.stage_index = status.total_stages
+
+
 def run_job(cfg, status: JobStatus, work_dir: Path, pdf_bytes: bytes, pdf_name: str) -> None:
-    """End-to-end job. Writes ``result.json`` on success; sets ``status.error``
+    """End-to-end PDF job. Writes ``result.json`` on success; sets ``status.error``
     on failure. Designed to be called inside a thread.
     """
     job_id = status.job_id
@@ -201,54 +245,143 @@ def run_job(cfg, status: JobStatus, work_dir: Path, pdf_bytes: bytes, pdf_name: 
     status.state = "running"
     status.started_at = time.time()
     _enter_stage(status, "paperprep")
-
     try:
-        log.info(f"[{job_id}] paperprep serve /prepare ({cfg.paperprep_serve.base_url}, pdf={pdf_path})")
-        prepare_body = _call_paperprep_prepare(cfg, job_id, pdf_path)
-
-        # Validate the per-paper result before claiming success
-        papers = prepare_body.get("papers") or []
-        if not papers:
-            raise RuntimeError(f"paperprep prepare returned no papers: {prepare_body}")
-        p0 = papers[0]
-        if p0.get("status") != "ok":
-            raise RuntimeError(
-                f"paperprep failed at paper level: status={p0.get('status')!r} "
-                f"error={p0.get('error')!r}"
-            )
-
+        log.info(f"[{job_id}] paperprep /prepare (pdf={pdf_path})")
+        prepare_body = _call_paperprep_prepare(cfg, job_id, input_type="pdf", path=pdf_path)
         _enter_stage(status, "paperlens_score")
-        modality = str(cfg.review.modality)
-        row = _load_sharegpt_export(prepare_body, modality)
-        if row is None:
-            raise RuntimeError(
-                f"paperprep prepare did not produce a {modality} sharegpt row; "
-                f"response keys={list(prepare_body.keys())}"
-            )
-        log.info(f"[{job_id}] paperlens serve /score ({cfg.paperlens_serve.base_url}, modality={modality})")
-        score = _score_via_paperlens(cfg, row)
-
+        sc = _score_from_prepare(cfg, prepare_body)
         result = {
-            "decision": _decision_from_p_accept(float(score["p_accept"])),
-            "p_accept": float(score["p_accept"]),
-            "logp_accept": score.get("logp_accept"),
-            "logp_reject": score.get("logp_reject"),
-            "pred": score.get("pred"),
-            "modality": modality,
+            **sc,
+            "modality": str(cfg.review.modality),
             "domain": str(cfg.review.domain),
+            "source_type": "pdf",
             "pdf_name": pdf_name,
             "job_dir": str(job_dir),
-            "paperprep_output_dir": prepare_body.get("output_dir"),
-            "paperprep_elapsed_s": prepare_body.get("elapsed_s"),
         }
-        (job_dir / "result.json").write_text(json.dumps(result, indent=2))
-        status.result = result
-        status.state = "done"
-        status.stage = "done"
-        status.stage_index = len(STAGES)
+        _write_done(status, job_dir, result)
         log.info(f"[{job_id}] result: {result['decision']} (p_accept={result['p_accept']:.4f})")
     except Exception as e:
         log.exception(f"[{job_id}] pipeline failed")
+        status.state = "error"
+        status.error = str(e)
+    finally:
+        status.finished_at = time.time()
+
+
+def run_latex_job(cfg, status: JobStatus, work_dir: Path, src_path: Path,
+                  main_tex: Optional[str]) -> None:
+    """Review a LaTeX source dir as-is (working tree). Single verdict, mirrors
+    the PDF flow but with type=latex_dir so paperprep compiles + anonymizes.
+    """
+    job_id = status.job_id
+    job_dir = work_dir / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    status.state = "running"
+    status.started_at = time.time()
+    _enter_stage(status, "paperprep")
+    try:
+        log.info(f"[{job_id}] paperprep /prepare (latex_dir={src_path}, main_tex={main_tex})")
+        prepare_body = _call_paperprep_prepare(
+            cfg, job_id, input_type="latex_dir", path=src_path, main_tex=main_tex or None)
+        _enter_stage(status, "paperlens_score")
+        sc = _score_from_prepare(cfg, prepare_body)
+        result = {
+            **sc,
+            "modality": str(cfg.review.modality),
+            "domain": str(cfg.review.domain),
+            "source_type": "latex_dir",
+            "latex_dir": str(src_path),
+            "main_tex": main_tex or None,
+            "git_mode": "latest",
+            "job_dir": str(job_dir),
+        }
+        _write_done(status, job_dir, result)
+        log.info(f"[{job_id}] result: {result['decision']} (p_accept={result['p_accept']:.4f})")
+    except Exception as e:
+        log.exception(f"[{job_id}] latex pipeline failed")
+        status.state = "error"
+        status.error = str(e)
+    finally:
+        status.finished_at = time.time()
+
+
+def run_latex_history_job(cfg, status: JobStatus, work_dir: Path, repo_path: Path,
+                          main_tex: Optional[str], commits: list[dict]) -> None:
+    """Score a paper across selected git commits -> a p_accept trajectory.
+
+    Each commit is git-archived into ``<job_dir>/src/<short>`` (never touches the
+    working tree), prepped + scored, then its bulky paperprep output is deleted
+    (inode hygiene -- only the trajectory numbers matter). Per-commit failures
+    are recorded in the trajectory, not fatal.
+    """
+    import shutil
+    from . import latexsrc
+
+    job_id = status.job_id
+    job_dir = work_dir / job_id
+    src_root = job_dir / "src"
+    src_root.mkdir(parents=True, exist_ok=True)
+
+    status.state = "running"
+    status.started_at = time.time()
+    status.total_stages = max(1, len(commits))
+    repo = latexsrc.git_toplevel(repo_path) or repo_path
+
+    trajectory: list[dict] = []
+    try:
+        for i, c in enumerate(commits):
+            sha = c["sha"]
+            short = c.get("short") or sha[:8]
+            status.stage = f"commit {i + 1}/{len(commits)}: {short}"
+            status.stage_index = i
+            status.stage_log.append({"t": time.time(), "stage": status.stage, "via": "commit"})
+            rec = {"order": i, "sha": sha, "short": short,
+                   "date": c.get("date"), "subject": c.get("subject"),
+                   "churn": c.get("churn"), "state": "pending"}
+            try:
+                tree = src_root / short
+                latexsrc.archive_commit(repo, sha, tree)
+                body = _call_paperprep_prepare(
+                    cfg, f"{job_id}_{short}", input_type="latex_dir",
+                    path=tree, main_tex=main_tex or None)
+                sc = _score_from_prepare(cfg, body)
+                rec.update({
+                    "state": "done",
+                    "p_accept": round(sc["p_accept"], 4),
+                    "decision": sc["decision"],
+                    "logp_accept": sc.get("logp_accept"),
+                    "logp_reject": sc.get("logp_reject"),
+                    "body_pages": sc.get("body_pages"),
+                })
+                log.info(f"[{job_id}] commit {short}: {rec['decision']} p_accept={rec['p_accept']}")
+                # inode hygiene: drop the per-commit paperprep output + archive tree
+                od = sc.get("paperprep_output_dir")
+                if od and Path(od).exists():
+                    shutil.rmtree(od, ignore_errors=True)
+                shutil.rmtree(tree, ignore_errors=True)
+            except Exception as e:
+                rec.update({"state": "error", "error": str(e)})
+                log.warning(f"[{job_id}] commit {short} failed: {e}")
+                shutil.rmtree(src_root / short, ignore_errors=True)
+            trajectory.append(rec)
+
+        result = {
+            "source_type": "latex_history",
+            "modality": str(cfg.review.modality),
+            "domain": str(cfg.review.domain),
+            "repo": str(repo),
+            "main_tex": main_tex or None,
+            "git_mode": "history",
+            "n_commits": len(commits),
+            "n_scored": sum(1 for r in trajectory if r["state"] == "done"),
+            "trajectory": trajectory,
+            "job_dir": str(job_dir),
+        }
+        _write_done(status, job_dir, result)
+        log.info(f"[{job_id}] history done: {result['n_scored']}/{len(commits)} commits scored")
+    except Exception as e:
+        log.exception(f"[{job_id}] latex history job failed")
         status.state = "error"
         status.error = str(e)
     finally:

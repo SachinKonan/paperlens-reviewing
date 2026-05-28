@@ -159,19 +159,110 @@
   .image-grid figure { margin: 0; }
   .image-grid img { width: 100%; height: 140px; object-fit: contain; background: var(--code-bg); border: 1px solid var(--card-bd); border-radius: 4px; }
   .image-grid figcaption { font-size: 11px; color: var(--muted); text-align: center; margin-top: 2px; }
+
+  /* ----- input mode toggle + latex form ----- */
+  .mode-toggle { display: flex; gap: 4px; margin-bottom: 14px; }
+  .mode-btn {
+    background: transparent; color: var(--muted); border: 1px solid var(--card-bd);
+    border-radius: 6px; padding: 7px 14px; font-size: 13px; font-weight: 500;
+  }
+  .mode-btn.active { background: rgba(31,111,235,0.08); color: var(--accent); border-color: var(--accent); }
+  .mode-pane { display: none; }
+  .mode-pane.active { display: block; }
+  .latex-row { display: flex; gap: 10px; align-items: center; }
+  .latex-row input[type="text"] {
+    flex: 1; padding: 8px 10px; border: 1px solid var(--card-bd); border-radius: 6px;
+    font-family: ui-monospace, monospace; font-size: 13px;
+  }
+  .latex-field { margin-top: 12px; display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
+  .latex-field input[type="text"] {
+    flex: 1; padding: 6px 9px; border: 1px solid var(--card-bd); border-radius: 6px;
+    font-family: ui-monospace, monospace; font-size: 12px;
+  }
+  .git-controls { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--card-bd); }
+  .git-controls .opt { display: inline-flex; gap: 5px; align-items: center; margin-right: 18px; font-size: 13px; cursor: pointer; }
+  .git-note { color: var(--muted); font-size: 12px; margin: 6px 0 0 0; }
+
+  /* ----- commit churn graph (history selection) ----- */
+  .commit-graph-wrap { margin-top: 12px; }
+  .commit-graph {
+    display: flex; gap: 6px; align-items: flex-end; overflow-x: auto;
+    padding: 8px 4px 4px 4px; border: 1px solid var(--card-bd); border-radius: 6px;
+    background: var(--code-bg);
+  }
+  .commit-col { display: flex; flex-direction: column; align-items: center; min-width: 56px; flex: 0 0 auto; }
+  .commit-bar-area { height: 122px; display: flex; align-items: flex-end; width: 100%; justify-content: center; }
+  .commit-bar { width: 26px; background: var(--bar-bg); border-radius: 3px 3px 0 0; cursor: pointer; transition: background 120ms ease; min-height: 2px; }
+  .commit-bar.sel { background: var(--bar-fill); }
+  .commit-meta { font-size: 10px; color: var(--muted); text-align: center; margin-top: 4px; line-height: 1.25; }
+  .commit-meta .sha { font-family: ui-monospace, monospace; color: var(--fg); }
+  .commit-col input[type="checkbox"] { margin-top: 5px; cursor: pointer; }
+  .graph-legend { font-size: 11px; color: var(--muted); margin-top: 8px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .sel-count { font-weight: 600; color: var(--accent); }
+
+  /* ----- trajectory result ----- */
+  .traj { overflow-x: auto; padding: 10px 4px; }
+  .traj-row { display: flex; gap: 10px; align-items: flex-end; }
+  .traj-col { display: flex; flex-direction: column; align-items: center; min-width: 66px; flex: 0 0 auto; }
+  .traj-bar-area { height: 168px; width: 100%; position: relative; display: flex; align-items: flex-end; justify-content: center; }
+  .traj-stack { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+  .traj-bar { width: 30px; border-radius: 3px 3px 0 0; min-height: 2px; }
+  .traj-bar.accept { background: var(--accept); }
+  .traj-bar.reject { background: var(--reject); }
+  .traj-bar.failed { background: var(--card-bd); }
+  .traj-val { font-size: 10px; color: var(--fg); margin-bottom: 2px; }
+  .thresh-line { position: absolute; left: 0; right: 0; bottom: 84px; border-top: 1px dashed var(--muted); }
+  .traj-meta { font-size: 10px; color: var(--muted); text-align: center; margin-top: 4px; line-height: 1.25; }
+  .traj-meta .sha { font-family: ui-monospace, monospace; color: var(--fg); }
+  .traj-thresh { font-size: 11px; color: var(--muted); margin-top: 8px; }
 </style>
 </head>
 <body>
 <div class="wrap" id="wrap">
 
 <h1>PaperLens Reviewing</h1>
-<p class="sub">Upload a paper PDF — paperprep extracts the body + page images, then PaperLens scores the predicted acceptance probability.</p>
+<p class="sub">Score a paper's predicted acceptance probability — upload a PDF, or point at a local LaTeX source dir (optionally across its git history).</p>
 
 <div class="card">
-  <div class="upload">
-    <input type="file" id="pdf" accept="application/pdf" />
-    <button id="submit">Submit</button>
+  <div class="mode-toggle">
+    <button class="mode-btn active" data-mode="pdf">PDF upload</button>
+    <button class="mode-btn" data-mode="latex">LaTeX source dir</button>
   </div>
+
+  <div class="mode-pane active" id="mode-pdf">
+    <div class="upload">
+      <input type="file" id="pdf" accept="application/pdf" />
+      <button id="submit">Submit</button>
+    </div>
+  </div>
+
+  <div class="mode-pane" id="mode-latex">
+    <div class="latex-row">
+      <input type="text" id="latex-path" placeholder="/abs/path/to/latex/dir  (contains main.tex)" />
+      <button id="probe">Probe</button>
+    </div>
+    <div id="latex-detail" style="display:none">
+      <div class="latex-field">
+        <span>Entrypoint:</span>
+        <input type="text" id="main-tex" placeholder="auto-detect (e.g. main.tex)" />
+      </div>
+      <div id="git-controls" class="git-controls" style="display:none">
+        <label class="opt"><input type="radio" name="gitmode" value="latest" checked> Latest (working tree)</label>
+        <label class="opt"><input type="radio" name="gitmode" value="history"> History (git commits)</label>
+        <p class="git-note" id="git-note"></p>
+        <div id="commit-graph-wrap" class="commit-graph-wrap" style="display:none">
+          <div class="commit-graph" id="commit-graph"></div>
+          <div class="graph-legend">
+            <span>bar = .tex line churn · blue = selected (above 25th pct)</span>
+            <span id="sel-summary"></span>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:14px"><button id="submit-latex">Submit</button></div>
+    </div>
+    <div class="meta" id="latex-meta"></div>
+  </div>
+
   <div class="meta" id="meta"></div>
 </div>
 
@@ -204,6 +295,9 @@ const bar = $("bar-fill");
 const stagesEl = $("stages");
 const verdictBox = $("verdict-box");
 const wrap = $("wrap");
+
+let CURRENT_MODE = "pdf";   // "pdf" | "latex"
+let PROBE = null;           // last /probe_latex response (holds history.commits)
 
 function renderStages(currentIdx, state) {
   stagesEl.innerHTML = "";
@@ -447,7 +541,11 @@ async function poll(job_id) {
     }
     if (s.state === "done") {
       bar.style.width = "100%";
-      await renderVerdict(job_id, s.result);
+      if (s.result && s.result.source_type === "latex_history") {
+        renderTrajectory(job_id, s.result);
+      } else {
+        await renderVerdict(job_id, s.result);
+      }
       return;
     }
     if (s.state === "error") {
@@ -458,30 +556,198 @@ async function poll(job_id) {
   }
 }
 
+/* ---------------- commit-history trajectory result ---------------- */
+
+function renderTrajectory(jobId, result) {
+  wrap.classList.add("wide");
+  verdictBox.style.display = "block";
+  const traj = result.trajectory || [];
+  const cols = traj.map((rec) => {
+    const done = rec.state === "done";
+    const pa = done ? rec.p_accept : null;
+    const cls = !done ? "failed" : (rec.decision === "Accept" ? "accept" : "reject");
+    const h = done ? Math.max(2, Math.round(168 * pa)) : 6;
+    const val = done ? pa.toFixed(2) : "—";
+    const tip = done ? `${rec.decision} · p_accept=${pa}` : (rec.state + (rec.error ? ": " + rec.error : ""));
+    return `<div class="traj-col">
+      <div class="traj-bar-area">
+        <div class="thresh-line"></div>
+        <div class="traj-stack">
+          <div class="traj-val">${val}</div>
+          <div class="traj-bar ${cls}" style="height:${h}px" title="${esc(tip)}"></div>
+        </div>
+      </div>
+      <div class="traj-meta"><span class="sha">${esc(rec.short)}</span><br>${esc(rec.date || "")}<br>${esc((rec.subject || "").slice(0, 22))}</div>
+    </div>`;
+  }).join("");
+  verdictBox.innerHTML = `<div class="card">
+    <h2 style="font-size:20px;margin:0 0 4px 0">Commit trajectory · ${esc(result.modality)}/${esc(result.domain)}</h2>
+    <p class="sub" style="margin:0 0 10px 0">${result.n_scored}/${result.n_commits} commits scored · p_accept across .tex history (oldest → newest)</p>
+    <div class="traj"><div class="traj-row">${cols}</div></div>
+    <p class="traj-thresh">bar height = p_accept · <span style="color:var(--accept)">green=Accept</span>, <span style="color:var(--reject)">red=Reject</span>, grey=failed · dashed line = 0.5 threshold</p>
+    <details><summary>raw trajectory JSON</summary><pre>${esc(JSON.stringify(result.trajectory, null, 2))}</pre></details>
+  </div>`;
+}
+
+/* ---------------- shared submit / progress reset ---------------- */
+
+function beginJob(historyMode) {
+  verdictBox.style.display = "none";
+  verdictBox.innerHTML = "";
+  wrap.classList.remove("wide");
+  progressBox.style.display = "block";
+  bar.style.width = "0%";
+  stagesEl.style.display = historyMode ? "none" : "flex";
+}
+
+async function afterSubmit(resp) {
+  if (Array.isArray(resp.stages) && resp.stages.length) STAGES = resp.stages;
+  await poll(resp.job_id);
+}
+
+/* ---------------- input-mode toggle ---------------- */
+
+document.querySelectorAll(".mode-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    CURRENT_MODE = btn.dataset.mode;
+    document.querySelectorAll(".mode-btn").forEach((b) => b.classList.toggle("active", b === btn));
+    document.querySelectorAll(".mode-pane").forEach((p) => p.classList.toggle("active", p.id === `mode-${CURRENT_MODE}`));
+  });
+});
+
+/* ---------------- PDF submit ---------------- */
+
 $("submit").addEventListener("click", async () => {
   const f = $("pdf").files[0];
   if (!f) { meta.textContent = "pick a PDF first"; return; }
   meta.textContent = `uploading ${f.name} (${(f.size/1024).toFixed(1)} KB) ...`;
   $("submit").disabled = true;
-  verdictBox.style.display = "none";
-  verdictBox.innerHTML = "";
-  wrap.classList.remove("wide");
-  progressBox.style.display = "block";
-
-  const body = new FormData();
-  body.append("file", f);
-  const r = await fetch("/submit", { method: "POST", body });
-  if (!r.ok) {
-    const t = await r.text();
-    renderError(`submit failed: ${r.status} ${t}`);
+  beginJob(false);
+  try {
+    const body = new FormData();
+    body.append("file", f);
+    const r = await fetch("/submit", { method: "POST", body });
+    if (!r.ok) { renderError(`submit failed: ${r.status} ${await r.text()}`); return; }
+    const resp = await r.json();
+    meta.textContent = `submitted job ${resp.job_id}`;
+    await afterSubmit(resp);
+  } finally {
     $("submit").disabled = false;
-    return;
   }
-  const resp = await r.json();
-  if (Array.isArray(resp.stages) && resp.stages.length) STAGES = resp.stages;
-  meta.textContent = `submitted job ${resp.job_id}`;
-  await poll(resp.job_id);
-  $("submit").disabled = false;
+});
+
+/* ---------------- LaTeX probe + commit graph ---------------- */
+
+function updateSelSummary() {
+  const commits = (PROBE && PROBE.history && PROBE.history.commits) || [];
+  const n = commits.filter((c) => c._chk && c._chk.checked).length;
+  $("sel-summary").innerHTML = `<span class="sel-count">${n}</span> selected`;
+}
+
+function renderCommitGraph(h) {
+  const g = $("commit-graph");
+  g.innerHTML = "";
+  const maxC = Math.max(1, ...h.commits.map((c) => c.churn));
+  h.commits.forEach((c) => {
+    const col = document.createElement("div"); col.className = "commit-col";
+    const area = document.createElement("div"); area.className = "commit-bar-area";
+    const barEl = document.createElement("div");
+    barEl.className = "commit-bar" + (c.above_p25 ? " sel" : "");
+    barEl.style.height = Math.max(2, Math.round(118 * c.churn / maxC)) + "px";
+    barEl.title = `${c.short} · churn ${c.churn} · ${c.subject}`;
+    area.appendChild(barEl);
+    const m = document.createElement("div"); m.className = "commit-meta";
+    m.innerHTML = `<span class="sha">${esc(c.short)}</span><br>${esc(c.date || "")}<br>${c.churn}`;
+    const chk = document.createElement("input"); chk.type = "checkbox"; chk.checked = !!c.above_p25;
+    const sync = () => { barEl.classList.toggle("sel", chk.checked); updateSelSummary(); };
+    chk.addEventListener("change", sync);
+    barEl.addEventListener("click", () => { chk.checked = !chk.checked; sync(); });
+    col.appendChild(area); col.appendChild(m); col.appendChild(chk);
+    g.appendChild(col);
+    c._chk = chk;
+  });
+  updateSelSummary();
+}
+
+$("probe").addEventListener("click", async () => {
+  const path = $("latex-path").value.trim();
+  const lm = $("latex-meta");
+  if (!path) { lm.textContent = "enter a directory path"; return; }
+  lm.textContent = "probing …";
+  $("probe").disabled = true;
+  try {
+    const r = await fetch("/probe_latex", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    if (!r.ok) {
+      lm.innerHTML = `<span style="color:var(--err)">${esc(await r.text())}</span>`;
+      $("latex-detail").style.display = "none";
+      return;
+    }
+    PROBE = await r.json();
+    $("latex-detail").style.display = "block";
+    $("main-tex").value = PROBE.suggested_main_tex || "";
+    $("main-tex").placeholder = PROBE.suggested_main_tex || "auto-detect (no \\documentclass found)";
+    let msg = `${PROBE.tex_files.length} .tex files · entrypoint: ${PROBE.suggested_main_tex || "auto"}`;
+    if (PROBE.warning) msg += ` · ⚠️ ${PROBE.warning}`;
+    lm.textContent = msg;
+    const gc = $("git-controls");
+    if (PROBE.is_git && PROBE.history) {
+      gc.style.display = "block";
+      const h = PROBE.history;
+      $("git-note").textContent = `git repo${PROBE.dirty ? " · working tree has uncommitted changes" : ""}`
+        + ` · window: last ${h.n} .tex commits · mean churn ${h.mean_churn.toFixed(0)}, 25th pct ${h.p25_churn.toFixed(0)}`;
+      renderCommitGraph(h);
+      document.querySelector('input[name="gitmode"][value="latest"]').checked = true;
+      $("commit-graph-wrap").style.display = "none";
+    } else {
+      gc.style.display = "none";
+    }
+  } finally {
+    $("probe").disabled = false;
+  }
+});
+
+document.querySelectorAll('input[name="gitmode"]').forEach((rb) => {
+  rb.addEventListener("change", () => {
+    const isHist = document.querySelector('input[name="gitmode"]:checked').value === "history";
+    $("commit-graph-wrap").style.display = isHist ? "block" : "none";
+  });
+});
+
+$("submit-latex").addEventListener("click", async () => {
+  const path = $("latex-path").value.trim();
+  const lm = $("latex-meta");
+  if (!path) { lm.textContent = "probe a dir first"; return; }
+  const mainTex = $("main-tex").value.trim();
+  let mode = "latest", commits = null, isHistory = false;
+  const gc = $("git-controls");
+  if (gc.style.display !== "none") {
+    const sel = document.querySelector('input[name="gitmode"]:checked');
+    if (sel && sel.value === "history") {
+      mode = "history"; isHistory = true;
+      commits = ((PROBE.history && PROBE.history.commits) || [])
+        .filter((c) => c._chk && c._chk.checked)
+        .map((c) => ({ sha: c.sha, short: c.short, date: c.date, subject: c.subject, churn: c.churn }));
+      if (!commits.length) { lm.textContent = "select at least one commit"; return; }
+    }
+  }
+  $("submit-latex").disabled = true;
+  lm.textContent = mode === "history" ? `scoring ${commits.length} commits …` : "submitting …";
+  beginJob(isHistory);
+  try {
+    const r = await fetch("/submit_latex", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, main_tex: mainTex || null, mode, commits }),
+    });
+    if (!r.ok) { renderError(`submit failed: ${r.status} ${await r.text()}`); return; }
+    const resp = await r.json();
+    lm.textContent = `submitted job ${resp.job_id} (${resp.mode})`;
+    await afterSubmit(resp);
+  } finally {
+    $("submit-latex").disabled = false;
+  }
 });
 </script>
 </body>
