@@ -197,6 +197,24 @@ def test_run_latex_history_job(git_repo: Path, tmp_path: Path):
     assert not (work / "hist" / "src" / selected[0]["short"]).exists()
 
 
+def test_list_dirs_endpoint(git_repo: Path, tmp_path: Path):
+    """Server-side folder browser flags git/tex dirs and hides dotdirs."""
+    from fastapi.testclient import TestClient
+    import paperlensreview.server as s
+
+    (tmp_path / "plain").mkdir()
+    (tmp_path / ".hidden").mkdir()
+    with TestClient(s.app) as c:
+        j = c.post("/list_dirs", json={"path": str(tmp_path)}).json()
+    names = {d["name"]: d for d in j["dirs"]}
+    assert "paper" in names                      # the git_repo fixture dir
+    assert names["paper"]["is_git"] and names["paper"]["has_tex"]
+    assert "plain" in names and not names["plain"]["is_git"]
+    assert ".hidden" not in names                # dotdirs hidden
+    assert j["parent"] is not None
+    assert j["path"] == str(tmp_path.resolve())
+
+
 def test_run_latex_history_records_failures(git_repo: Path, tmp_path: Path):
     """A per-commit paperprep failure is recorded, not fatal to the job."""
     cfg = _make_cfg()

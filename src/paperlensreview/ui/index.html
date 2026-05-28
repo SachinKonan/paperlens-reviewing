@@ -215,6 +215,27 @@
   .traj-meta { font-size: 10px; color: var(--muted); text-align: center; margin-top: 4px; line-height: 1.25; }
   .traj-meta .sha { font-family: ui-monospace, monospace; color: var(--fg); }
   .traj-thresh { font-size: 11px; color: var(--muted); margin-top: 8px; }
+
+  /* ----- server-side folder browser ----- */
+  .latex-row input[readonly] { background: var(--code-bg); color: var(--fg); cursor: default; }
+  .dir-browser {
+    margin-top: 10px; border: 1px solid var(--card-bd); border-radius: 6px;
+    background: #fff; padding: 10px; max-height: 340px; overflow: auto;
+  }
+  .db-cur { font-family: ui-monospace, monospace; font-size: 12px; color: var(--fg); margin-bottom: 8px; word-break: break-all; }
+  .db-actions { display: flex; gap: 8px; margin-bottom: 10px; }
+  .db-actions button { font-size: 12px; padding: 5px 10px; }
+  .db-up, .db-cancel { background: #fff; color: var(--fg); border: 1px solid var(--card-bd); }
+  .db-use { background: var(--accent); color: #fff; }
+  .db-list { display: flex; flex-direction: column; gap: 2px; }
+  .db-item { cursor: pointer; padding: 4px 8px; border-radius: 4px; font-size: 13px; }
+  .db-item:hover { background: var(--hover-bg); }
+  .db-empty { color: var(--muted); font-size: 12px; padding: 6px; }
+  .tag-git { color: var(--accent); font-size: 11px; font-weight: 600; }
+  .tag-tex { color: var(--accept); font-size: 11px; font-weight: 600; }
+
+  /* ----- lock the input card while a job runs ----- */
+  .card.locked { pointer-events: none; opacity: 0.55; }
 </style>
 </head>
 <body>
@@ -223,7 +244,7 @@
 <h1>PaperLens Reviewing</h1>
 <p class="sub">Score a paper's predicted acceptance probability — upload a PDF, or point at a local LaTeX source dir (optionally across its git history).</p>
 
-<div class="card">
+<div class="card" id="input-card">
   <div class="mode-toggle">
     <button class="mode-btn active" data-mode="pdf">PDF upload</button>
     <button class="mode-btn" data-mode="latex">LaTeX source dir</button>
@@ -238,9 +259,10 @@
 
   <div class="mode-pane" id="mode-latex">
     <div class="latex-row">
-      <input type="text" id="latex-path" placeholder="/abs/path/to/latex/dir  (contains main.tex)" />
-      <button id="probe">Probe</button>
+      <input type="text" id="latex-path" placeholder="(no folder selected — click Browse)" readonly />
+      <button id="browse">Browse…</button>
     </div>
+    <div id="dir-browser" class="dir-browser" style="display:none"></div>
     <div id="latex-detail" style="display:none">
       <div class="latex-field">
         <span>Entrypoint:</span>
@@ -591,6 +613,10 @@ function renderTrajectory(jobId, result) {
 
 /* ---------------- shared submit / progress reset ---------------- */
 
+// Lock the whole input card while a job runs: no mode switching, no commit
+// selection, no second submit, until the run finishes (done or error).
+function setBusy(b) { $("input-card").classList.toggle("locked", b); }
+
 function beginJob(historyMode) {
   verdictBox.style.display = "none";
   verdictBox.innerHTML = "";
@@ -598,6 +624,7 @@ function beginJob(historyMode) {
   progressBox.style.display = "block";
   bar.style.width = "0%";
   stagesEl.style.display = historyMode ? "none" : "flex";
+  setBusy(true);
 }
 
 async function afterSubmit(resp) {
@@ -633,6 +660,7 @@ $("submit").addEventListener("click", async () => {
     await afterSubmit(resp);
   } finally {
     $("submit").disabled = false;
+    setBusy(false);
   }
 });
 
@@ -669,12 +697,10 @@ function renderCommitGraph(h) {
   updateSelSummary();
 }
 
-$("probe").addEventListener("click", async () => {
-  const path = $("latex-path").value.trim();
+async function doProbe(path) {
   const lm = $("latex-meta");
-  if (!path) { lm.textContent = "enter a directory path"; return; }
+  if (!path) { lm.textContent = "select a folder first"; return; }
   lm.textContent = "probing …";
-  $("probe").disabled = true;
   try {
     const r = await fetch("/probe_latex", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -704,10 +730,58 @@ $("probe").addEventListener("click", async () => {
     } else {
       gc.style.display = "none";
     }
-  } finally {
-    $("probe").disabled = false;
+  } catch (e) {
+    lm.innerHTML = `<span style="color:var(--err)">${esc(String(e))}</span>`;
   }
-});
+}
+
+/* ---------------- server-side folder browser ---------------- */
+
+let BROWSE_PATH = null;
+
+async function openBrowser(path) {
+  const el = $("dir-browser");
+  el.style.display = "block";
+  el.innerHTML = `<div class="db-empty">loading …</div>`;
+  let d;
+  try {
+    const r = await fetch("/list_dirs", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    if (!r.ok) { el.innerHTML = `<div class="err">${esc(await r.text())}</div>`; return; }
+    d = await r.json();
+  } catch (e) {
+    el.innerHTML = `<div class="err">${esc(String(e))}</div>`; return;
+  }
+  BROWSE_PATH = d.path;
+  const items = d.dirs.length
+    ? d.dirs.map((x) =>
+        `<div class="db-item" data-path="${esc(x.path)}">📁 ${esc(x.name)}`
+        + `${x.is_git ? ' <span class="tag-git">git</span>' : ""}`
+        + `${x.has_tex ? ' <span class="tag-tex">tex</span>' : ""}</div>`).join("")
+    : `<div class="db-empty">(no sub-folders here)</div>`;
+  el.innerHTML = `
+    <div class="db-cur">${esc(d.path)}</div>
+    <div class="db-actions">
+      <button type="button" class="db-use">✓ Use this folder</button>
+      ${d.parent ? '<button type="button" class="db-up">⬆ Up</button>' : ""}
+      <button type="button" class="db-cancel">Cancel</button>
+    </div>
+    <div class="db-list">${items}</div>`;
+  el.querySelectorAll(".db-item").forEach((it) =>
+    it.addEventListener("click", () => openBrowser(it.dataset.path)));
+  const up = el.querySelector(".db-up");
+  if (up) up.addEventListener("click", () => openBrowser(d.parent));
+  el.querySelector(".db-cancel").addEventListener("click", () => { el.style.display = "none"; });
+  el.querySelector(".db-use").addEventListener("click", () => {
+    el.style.display = "none";
+    $("latex-path").value = BROWSE_PATH;
+    doProbe(BROWSE_PATH);
+  });
+}
+
+$("browse").addEventListener("click", () => openBrowser($("latex-path").value || null));
 
 document.querySelectorAll('input[name="gitmode"]').forEach((rb) => {
   rb.addEventListener("change", () => {
@@ -747,6 +821,7 @@ $("submit-latex").addEventListener("click", async () => {
     await afterSubmit(resp);
   } finally {
     $("submit-latex").disabled = false;
+    setBusy(false);
   }
 });
 </script>

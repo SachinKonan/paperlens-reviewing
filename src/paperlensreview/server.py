@@ -130,6 +130,43 @@ class SubmitLatexReq(BaseModel):
     n_window: int = 20                 # history default window (last N .tex commits)
 
 
+class ListDirsReq(BaseModel):
+    path: Optional[str] = None
+
+
+@app.post("/list_dirs")
+def list_dirs(req: ListDirsReq) -> dict:
+    """Server-side folder browser: list immediate sub-directories of ``path``
+    (default: the server user's home).
+
+    The LaTeX source lives on the *server* filesystem -- paperprep compiles it
+    and ``git archive`` reads its history there -- so the UI browses the server
+    rather than a browser folder-picker (which can't expose an absolute path).
+    Read-only: lists directories, never file contents.
+    """
+    start = Path(req.path).expanduser() if req.path else Path.home()
+    if not start.exists() or not start.is_dir():
+        start = Path.home()
+    start = start.resolve()
+    try:
+        entries = sorted(start.iterdir(), key=lambda p: p.name.lower())
+    except PermissionError:
+        raise HTTPException(403, f"permission denied: {start}")
+    dirs: list[dict] = []
+    for child in entries:
+        if child.name.startswith(".") or not child.is_dir():
+            continue
+        try:
+            is_git = (child / ".git").exists()
+            has_tex = any(child.glob("*.tex"))
+        except (PermissionError, OSError):
+            is_git = has_tex = False
+        dirs.append({"name": child.name, "path": str(child),
+                     "is_git": is_git, "has_tex": has_tex})
+    parent = str(start.parent) if start.parent != start else None
+    return {"path": str(start), "parent": parent, "dirs": dirs}
+
+
 @app.post("/probe_latex")
 def probe_latex(req: ProbeLatexReq) -> dict:
     """Inspect a local LaTeX dir: validate, suggest the entrypoint, list .tex
