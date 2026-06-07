@@ -1168,6 +1168,12 @@ function _ensureAgentChats(mode, agent) {
       <div class="agent-chat-body" data-body></div>
     </div>`;
   box.appendChild(chats);
+  // Result box is hidden until it has content -- now that we just gave it
+  // some, flip the visibility check so the chat popups are actually shown
+  // while events stream in (verdict card lands later, after the agents end).
+  // Also widen the page so the two side-by-side panes have room to breathe.
+  box.dataset.wide = "1";
+  refreshResultVisibility();
   return chats;
 }
 
