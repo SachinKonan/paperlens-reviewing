@@ -640,11 +640,16 @@ class AgentResult:
 
 
 def _build_argv(agent: str, prompt: str, workspace: Path) -> list[str]:
+    """Headless invocation with matched xhigh reasoning effort on both
+    CLIs. The paper used "high reasoning effort" for both Claude Code
+    (Sonnet-4.6) and Codex (GPT-5.4); we go one step above that on each.
+    """
     if agent == "claude":
         return [
             "claude", "-p", prompt,
             "--output-format", "stream-json",
             "--verbose",
+            "--effort", "xhigh",              # low|medium|high|xhigh|max
             "--dangerously-skip-permissions",
             "--add-dir", str(workspace),
         ]
@@ -653,6 +658,7 @@ def _build_argv(agent: str, prompt: str, workspace: Path) -> list[str]:
             "codex", "exec", "--json",
             "--skip-git-repo-check",
             "--dangerously-bypass-approvals-and-sandbox",
+            "-c", "model_reasoning_effort=xhigh",   # GPT-5.x: xhigh tier
             "-C", str(workspace),
             prompt,
         ]

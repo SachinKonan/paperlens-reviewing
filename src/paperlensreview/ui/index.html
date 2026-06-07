@@ -358,9 +358,13 @@
   .agent-chat-body { flex: 1; overflow-y: auto; padding: 10px 12px;
                      font-size: 12px; line-height: 1.45; }
   .agent-msg { margin-bottom: 10px; }
-  .agent-msg.assistant { padding-left: 0; }
-  .agent-msg .role { font-weight: 600; color: var(--accent); font-size: 11px;
-                     text-transform: uppercase; letter-spacing: 0.4px; }
+  /* Assistant turns get a soft tinted card so the model's running narration
+     visually pops out from the dense monospace tool I/O. */
+  .agent-msg.assistant { padding: 8px 10px; background: #f0f7ff;
+                         border-left: 3px solid var(--accent); border-radius: 0 4px 4px 0; }
+  .agent-msg.assistant pre { color: #0b3d6e; }
+  .agent-msg .role { font-weight: 700; color: var(--accent); font-size: 10px;
+                     text-transform: uppercase; letter-spacing: 0.6px; }
   .agent-msg pre { white-space: pre-wrap; font-family: inherit; margin: 4px 0; }
   .agent-tool { border-left: 3px solid var(--accent); background: #fff;
                 padding: 6px 8px; margin: 6px 0; border-radius: 0 4px 4px 0; }
@@ -375,10 +379,47 @@
                              white-space: pre-wrap; }
   .agent-tool .tool-result.error { color: #721c24; background: #f8d7da; }
   .agent-status { font-size: 11px; color: var(--muted); font-style: italic; margin: 4px 0; }
-  .agent-final { margin-top: 8px; padding: 8px 12px; background: #e7f3ff; border-radius: 4px;
-                 font-size: 12px; border-left: 3px solid var(--accent); }
-  .agent-final .key { font-weight: 600; }
-  .agent-final.fail { background: #f8d7da; border-left-color: #c82333; }
+
+  /* ----- Final review card (rendered after the agent's "Done: <sid>") ----- */
+  /* Sits at the bottom of each chat body. Distinct from the assistant
+     emphasis (which is blue) -- accept = green, reject = red, with the same
+     palette as the main verdict card so the parallel between PaperLens and
+     the agent is visually obvious. */
+  .agent-review { margin-top: 14px; border-radius: 6px; overflow: hidden;
+                  border: 2px solid var(--card-bd); }
+  .agent-review.accept { border-color: var(--accept); }
+  .agent-review.reject { border-color: var(--reject); }
+  .agent-review.fail   { border-color: #c82333; }
+  .agent-review-banner { padding: 12px 14px; display: flex; align-items: center;
+                         gap: 14px; font-size: 13px; }
+  .agent-review.accept .agent-review-banner { background: #d4edda; color: #155724; }
+  .agent-review.reject .agent-review-banner { background: #f8d7da; color: #721c24; }
+  .agent-review.fail   .agent-review-banner { background: #f8d7da; color: #721c24; }
+  .agent-review-banner .decision { font-size: 18px; font-weight: 800; letter-spacing: 0.4px;
+                                   text-transform: uppercase; }
+  .agent-review-banner .rating { font-size: 14px; font-weight: 600; opacity: 0.85; }
+  .agent-review-banner .elapsed { font-size: 11px; opacity: 0.7; margin-left: auto; }
+  .agent-review-scores { display: grid; grid-template-columns: repeat(4, 1fr);
+                         padding: 8px 14px; gap: 8px; background: #fff;
+                         border-top: 1px solid var(--card-bd); border-bottom: 1px solid var(--card-bd);
+                         font-size: 11px; }
+  .agent-review-score { display: flex; flex-direction: column; align-items: center;
+                        padding: 4px 6px; background: var(--hover-bg); border-radius: 4px; }
+  .agent-review-score .label { color: var(--muted); text-transform: uppercase;
+                               letter-spacing: 0.4px; font-size: 10px; }
+  .agent-review-score .value { font-size: 16px; font-weight: 700; color: var(--fg); }
+  .agent-review-sections { padding: 10px 14px; background: #fff; font-size: 12px;
+                           line-height: 1.5; }
+  .agent-review-sections h4 { margin: 8px 0 4px 0; font-size: 11px;
+                              text-transform: uppercase; letter-spacing: 0.5px;
+                              color: var(--accent); }
+  .agent-review-sections .field { white-space: pre-wrap; color: var(--fg);
+                                  margin: 0 0 8px 0; }
+  .agent-review-sections .field.muted { color: var(--muted); font-style: italic; }
+  /* Fallback for runs that ended without a parseable predictions.json. */
+  .agent-final-fail { margin-top: 14px; padding: 10px 14px; background: #f8d7da;
+                      color: #721c24; border-radius: 4px; border-left: 4px solid #c82333;
+                      font-size: 12px; }
 </style>
 </head>
 <body>
@@ -826,6 +867,9 @@ metadata: ${esc(JSON.stringify(row._metadata || {}, null, 2))}</pre>
 
 async function poll(job_id, mode) {
   let lastStage = null;
+  let earlyVerdictRendered = false;   // PaperLens decision card lands as soon
+                                       // as paperlens_score finishes, even if
+                                       // the (optional) agent stages still run.
   while (true) {
     const r = await fetch(`/status/${job_id}`);
     if (!r.ok) {
@@ -846,11 +890,24 @@ async function poll(job_id, mode) {
       progressMeta.textContent = `stage: ${s.stage || "queued"}  (${idx + 1}/${total})`;
       lastStage = s.stage;
     }
+    // Show PaperLens's decision as soon as the score stage is past -- don't
+    // make the user wait for the agent runs to finish. renderVerdict is
+    // idempotent (preserves any in-flight .agent-chats), so re-calling at
+    // the end of the job is safe.
+    if (!earlyVerdictRendered
+        && s.result
+        && s.result.source_type !== "latex_history"
+        && (s.stage === "agent_setup" || s.stage === "agent_review")) {
+      earlyVerdictRendered = true;
+      await renderVerdict(job_id, s.result, mode);
+    }
     if (s.state === "done") {
       bar.style.width = "100%";
       if (s.result && s.result.source_type === "latex_history") {
         renderTrajectory(job_id, s.result, mode);
       } else {
+        // Re-render to pick up the final result.json (which now carries the
+        // agent block + paperlens_prior calibration bundle).
         await renderVerdict(job_id, s.result, mode);
       }
       return;
@@ -1230,18 +1287,47 @@ function _renderAgentEvent(bodyEl, ev) {
   } else if (ev.kind === "done") {
     const p = ev.payload || {};
     const preds = p.predictions;
-    const decision = preds && preds.decision;
-    const rating = preds && preds.rating;
-    const cls = (preds && decision) ? "" : "fail";
-    div.className = `agent-final ${cls}`;
-    if (preds) {
-      div.innerHTML = `
-        <span class="key">agent decision:</span> ${esc(decision || "?")}
-        &nbsp;·&nbsp;rating ${esc(String(rating ?? "?"))}
-        &nbsp;·&nbsp;${esc(((p.elapsed_s || 0)).toFixed ? (p.elapsed_s).toFixed(1) : p.elapsed_s)}s`;
-    } else {
-      div.innerHTML = `<span class="key">done</span> (no predictions.json — schema fail?)`;
+    const elapsedNum = (typeof p.elapsed_s === "number") ? p.elapsed_s : null;
+    const elapsedStr = elapsedNum !== null ? `${elapsedNum.toFixed(1)}s` : "";
+    if (!preds) {
+      div.className = "agent-final-fail";
+      div.innerHTML = `agent finished without a parseable <code>predictions.json</code>
+        ${elapsedStr ? `&nbsp;·&nbsp; ${esc(elapsedStr)}` : ""}
+        — likely the schema validator rejected the output.`;
+      bodyEl.appendChild(div);
+      bodyEl.scrollTop = bodyEl.scrollHeight;
+      return;
     }
+    div.className = `agent-review ${esc(preds.decision === "accept" ? "accept" : "reject")}`;
+    const scoreCell = (label, val) =>
+      `<div class="agent-review-score"><span class="label">${esc(label)}</span>
+         <span class="value">${esc(val === undefined || val === null ? "—" : val)}</span></div>`;
+    const section = (title, val, mutedIfBlank) => {
+      const v = (val == null) ? "" : String(val);
+      const blank = !v.trim();
+      const cls = (blank && mutedIfBlank) ? "field muted" : "field";
+      const display = blank ? (mutedIfBlank ? "(none)" : "") : v;
+      return `<h4>${esc(title)}</h4><p class="${cls}">${esc(display)}</p>`;
+    };
+    div.innerHTML = `
+      <div class="agent-review-banner">
+        <span class="decision">${esc(preds.decision)}</span>
+        <span class="rating">rating ${esc(String(preds.rating ?? "?"))}/10</span>
+        <span class="elapsed">${esc(elapsedStr)}</span>
+      </div>
+      <div class="agent-review-scores">
+        ${scoreCell("conf", preds.confidence)}
+        ${scoreCell("sound", preds.soundness)}
+        ${scoreCell("present", preds.presentation)}
+        ${scoreCell("contrib", preds.contribution)}
+      </div>
+      <div class="agent-review-sections">
+        ${section("Summary", preds.summary)}
+        ${section("Strengths", preds.strengths)}
+        ${section("Weaknesses", preds.weaknesses)}
+        ${section("Questions", preds.questions, true)}
+        ${section("Missing references", preds.missing_references, true)}
+      </div>`;
   } else {
     div.className = "agent-status";
     div.textContent = `· ${ev.kind}`;
