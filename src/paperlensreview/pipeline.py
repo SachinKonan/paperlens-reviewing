@@ -316,12 +316,15 @@ def run_latex_history_job(cfg, status: JobStatus, work_dir: Path, repo_path: Pat
                           main_tex: Optional[str], commits: list[dict]) -> None:
     """Score a paper across selected git commits -> a p_accept trajectory.
 
-    Each commit is git-archived into ``<job_dir>/src/<short>`` (never touches the
-    working tree), prepped + scored, then its bulky paperprep output is deleted
-    (inode hygiene -- only the trajectory numbers matter). Per-commit failures
-    are recorded in the trajectory, not fatal.
+    Each commit is git-archived into ``<job_dir>/src/<short>``, prepped + scored.
+    Per-commit paperprep artifacts (source tree + MinerU outputs + sharegpt
+    export) are KEPT so the UI's drilldown panel can render that commit's
+    Files browser and the exact sharegpt row PaperLens scored on. Inode cost:
+    K commits x a few hundred MinerU crops each -- run ``checkquota`` if you
+    chain very long histories (the ZHUANGL group is at ~175M cap).
+
+    Per-commit failures are recorded in the trajectory and not fatal.
     """
-    import shutil
     from . import latexsrc
 
     job_id = status.job_id
@@ -359,17 +362,16 @@ def run_latex_history_job(cfg, status: JobStatus, work_dir: Path, repo_path: Pat
                     "logp_accept": sc.get("logp_accept"),
                     "logp_reject": sc.get("logp_reject"),
                     "body_pages": sc.get("body_pages"),
+                    # Per-commit artifacts kept around for the UI drilldown.
+                    # /jobs/<id>/{tree,file,payload}?commit=<short> scopes
+                    # to these dirs via _job_roots(commit=...).
+                    "paperprep_output_dir": sc.get("paperprep_output_dir"),
+                    "src_dir": str(tree),
                 })
                 log.info(f"[{job_id}] commit {short}: {rec['decision']} p_accept={rec['p_accept']}")
-                # inode hygiene: drop the per-commit paperprep output + archive tree
-                od = sc.get("paperprep_output_dir")
-                if od and Path(od).exists():
-                    shutil.rmtree(od, ignore_errors=True)
-                shutil.rmtree(tree, ignore_errors=True)
             except Exception as e:
                 rec.update({"state": "error", "error": str(e)})
                 log.warning(f"[{job_id}] commit {short} failed: {e}")
-                shutil.rmtree(src_root / short, ignore_errors=True)
             trajectory.append(rec)
 
         result = {

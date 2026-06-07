@@ -193,8 +193,13 @@ def test_run_latex_history_job(git_repo: Path, tmp_path: Path):
     assert all(r["p_accept"] == pytest.approx(0.6) for r in res["trajectory"])
     # trajectory keeps oldest->newest order from the selection
     assert [r["subject"] for r in res["trajectory"]] == ["c1 big", "c3 med"]
-    # per-commit archive trees were cleaned up (inode hygiene)
-    assert not (work / "hist" / "src" / selected[0]["short"]).exists()
+    # Per-commit artifacts are KEPT (browseable via the drilldown panel):
+    # both the archived src tree and the paperprep output dir survive, and
+    # the trajectory rec records their paths.
+    for rec in res["trajectory"]:
+        assert (work / "hist" / "src" / rec["short"]).exists(), "src tree should persist"
+        assert rec["src_dir"] == str(work / "hist" / "src" / rec["short"])
+        assert rec["paperprep_output_dir"]  # not popped after scoring
 
 
 def test_list_dirs_endpoint(git_repo: Path, tmp_path: Path):

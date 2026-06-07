@@ -388,14 +388,42 @@ from pathlib import Path as _Path
 _TREE_MAX_FILES_PER_DIR = 500
 
 
-def _job_roots(job_id: str) -> dict[str, _Path]:
-    """Return {label: root_path} pairs the explorer is allowed to read."""
+def _find_trajectory_rec(result: dict, commit: str) -> Optional[dict]:
+    """Look up a commit in a latex_history result by short sha or full sha."""
+    for rec in (result.get("trajectory") or []):
+        if rec.get("short") == commit or rec.get("sha") == commit:
+            return rec
+    return None
+
+
+def _job_roots(job_id: str, *, commit: Optional[str] = None) -> dict[str, _Path]:
+    """Return {label: root_path} pairs the explorer is allowed to read.
+
+    ``commit`` scopes to a single commit of a latex_history job: the explorer
+    sees just that commit's archived source tree + paperprep output, not the
+    whole multi-commit job dir. Used by the trajectory drilldown panel so each
+    point in the chart resolves to *its* tree/payload.
+    """
     j = _state["jobs"].get(job_id)
     if not j:
         raise HTTPException(404, f"unknown job_id: {job_id!r}")
     if not j.result:
         raise HTTPException(409, f"job {job_id} not done yet (state={j.state!r})")
-    roots: dict[str, _Path] = {"review": _Path(j.result["job_dir"]).resolve()}
+    if commit:
+        rec = _find_trajectory_rec(j.result, commit)
+        if rec is None:
+            raise HTTPException(404, f"commit {commit!r} not in this job's trajectory")
+        roots: dict[str, _Path] = {}
+        src = rec.get("src_dir")
+        if src and _Path(src).exists():
+            roots["src"] = _Path(src).resolve()
+        pp = rec.get("paperprep_output_dir")
+        if pp and _Path(pp).exists():
+            roots["paperprep"] = _Path(pp).resolve()
+        if not roots:
+            raise HTTPException(404, f"no on-disk artifacts left for commit {commit!r}")
+        return roots
+    roots = {"review": _Path(j.result["job_dir"]).resolve()}
     pp = j.result.get("paperprep_output_dir")
     if pp:
         roots["paperprep"] = _Path(pp).resolve()
@@ -423,15 +451,16 @@ def _list_tree(root: _Path) -> dict:
 
 
 @app.get("/jobs/{job_id}/tree")
-def job_tree(job_id: str) -> dict:
-    return {label: _list_tree(root) for label, root in _job_roots(job_id).items()}
+def job_tree(job_id: str, commit: Optional[str] = None) -> dict:
+    return {label: _list_tree(root)
+            for label, root in _job_roots(job_id, commit=commit).items()}
 
 
 @app.get("/jobs/{job_id}/file")
-def job_file(job_id: str, path: str):
+def job_file(job_id: str, path: str, commit: Optional[str] = None):
     """Stream a file from the job's allowed roots. Rejects path-traversal."""
     target = _Path(path).resolve()
-    roots = _job_roots(job_id)
+    roots = _job_roots(job_id, commit=commit)
     if not any(target == r or target.is_relative_to(r) for r in roots.values()):
         raise HTTPException(403, f"path not under any allowed root for job {job_id}")
     if not target.is_file():
@@ -445,15 +474,28 @@ def job_file(job_id: str, path: str):
 
 
 @app.get("/jobs/{job_id}/payload")
-def job_payload(job_id: str) -> dict:
-    """Return the exact sharegpt row paperlens-serve scored, plus the score."""
+def job_payload(job_id: str, commit: Optional[str] = None) -> dict:
+    """Return the exact sharegpt row paperlens-serve scored, plus the score.
+
+    ``commit`` (latex_history only) scopes to that commit's paperprep output
+    so each point in the trajectory chart can render the row PaperLens
+    actually saw for *that* commit.
+    """
     j = _state["jobs"].get(job_id)
     if not j:
         raise HTTPException(404, f"unknown job_id: {job_id!r}")
     if not j.result:
         raise HTTPException(409, f"job {job_id} not done yet")
     modality = j.result.get("modality", "vision")
-    pp = j.result.get("paperprep_output_dir")
+    if commit:
+        rec = _find_trajectory_rec(j.result, commit)
+        if rec is None:
+            raise HTTPException(404, f"commit {commit!r} not in this job's trajectory")
+        pp = rec.get("paperprep_output_dir")
+        score: dict = {**rec}
+    else:
+        pp = j.result.get("paperprep_output_dir")
+        score = dict(j.result)
     if not pp:
         raise HTTPException(404, "paperprep_output_dir missing from result")
     sg_path = _Path(pp) / "sharegpt" / modality / "data.json"
@@ -469,10 +511,11 @@ def job_payload(job_id: str) -> dict:
             row = {**row, "conversations": convs}
     return {
         "job_id": job_id,
+        "commit": commit,
         "modality": modality,
         "sharegpt_path": str(sg_path),
         "row": row,
-        "score": j.result,
+        "score": score,
     }
 
 

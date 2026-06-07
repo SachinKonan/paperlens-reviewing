@@ -183,38 +183,74 @@
   .git-controls .opt { display: inline-flex; gap: 5px; align-items: center; margin-right: 18px; font-size: 13px; cursor: pointer; }
   .git-note { color: var(--muted); font-size: 12px; margin: 6px 0 0 0; }
 
-  /* ----- commit churn graph (history selection) ----- */
+  /* ----- commit churn graph (history selection) -----
+     Layout: a 2-column grid [row labels | scrollable commit columns].
+     Each commit column has 5 fixed-height rows so the labels align. */
   .commit-graph-wrap { margin-top: 12px; }
-  .commit-graph {
-    display: flex; gap: 6px; align-items: flex-end; overflow-x: auto;
-    padding: 8px 4px 4px 4px; border: 1px solid var(--card-bd); border-radius: 6px;
-    background: var(--code-bg);
+  .commit-graph-explainer {
+    font-size: 11px; color: var(--muted); margin: 0 0 8px 0; line-height: 1.5;
   }
-  .commit-col { display: flex; flex-direction: column; align-items: center; min-width: 56px; flex: 0 0 auto; }
+  .commit-graph-explainer code { font-size: 11px; }
+  .commit-graph-grid {
+    display: grid; grid-template-columns: auto 1fr; gap: 8px;
+    border: 1px solid var(--card-bd); border-radius: 6px;
+    background: var(--code-bg); padding: 8px 4px;
+  }
+  .commit-row-labels {
+    display: flex; flex-direction: column; align-items: flex-end;
+    padding-right: 8px; font-size: 10px; color: var(--muted);
+    border-right: 1px dashed var(--card-bd);
+  }
+  .commit-row-labels .rl {
+    display: flex; align-items: center; justify-content: flex-end;
+    white-space: nowrap;
+  }
+  .commit-row-labels .rl.bar    { height: 122px; align-items: flex-end; padding-bottom: 4px; }
+  .commit-row-labels .rl.sha    { height: 14px; font-family: ui-monospace, monospace; color: var(--fg); }
+  .commit-row-labels .rl.date   { height: 14px; }
+  .commit-row-labels .rl.churn  { height: 14px; }
+  .commit-row-labels .rl.chk    { height: 22px; padding-top: 4px; }
+  .commit-graph { display: flex; gap: 6px; align-items: flex-end; overflow-x: auto; }
+  .commit-col {
+    display: flex; flex-direction: column; align-items: center;
+    min-width: 56px; flex: 0 0 auto; line-height: 1.25;
+  }
   .commit-bar-area { height: 122px; display: flex; align-items: flex-end; width: 100%; justify-content: center; }
   .commit-bar { width: 26px; background: var(--bar-bg); border-radius: 3px 3px 0 0; cursor: pointer; transition: background 120ms ease; min-height: 2px; }
   .commit-bar.sel { background: var(--bar-fill); }
-  .commit-meta { font-size: 10px; color: var(--muted); text-align: center; margin-top: 4px; line-height: 1.25; }
-  .commit-meta .sha { font-family: ui-monospace, monospace; color: var(--fg); }
-  .commit-col input[type="checkbox"] { margin-top: 5px; cursor: pointer; }
+  .commit-col .c-sha   { height: 14px; font-size: 10px; font-family: ui-monospace, monospace; color: var(--fg); }
+  .commit-col .c-date  { height: 14px; font-size: 10px; color: var(--muted); }
+  .commit-col .c-churn { height: 14px; font-size: 10px; color: var(--muted); }
+  .commit-col .c-chk   { height: 22px; padding-top: 4px; }
+  .commit-col input[type="checkbox"] { cursor: pointer; }
   .graph-legend { font-size: 11px; color: var(--muted); margin-top: 8px; display: flex; gap: 16px; flex-wrap: wrap; }
   .sel-count { font-weight: 600; color: var(--accent); }
 
-  /* ----- trajectory result ----- */
-  .traj { overflow-x: auto; padding: 10px 4px; }
-  .traj-row { display: flex; gap: 10px; align-items: flex-end; }
-  .traj-col { display: flex; flex-direction: column; align-items: center; min-width: 66px; flex: 0 0 auto; }
-  .traj-bar-area { height: 168px; width: 100%; position: relative; display: flex; align-items: flex-end; justify-content: center; }
-  .traj-stack { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
-  .traj-bar { width: 30px; border-radius: 3px 3px 0 0; min-height: 2px; }
-  .traj-bar.accept { background: var(--accept); }
-  .traj-bar.reject { background: var(--reject); }
-  .traj-bar.failed { background: var(--card-bd); }
-  .traj-val { font-size: 10px; color: var(--fg); margin-bottom: 2px; }
-  .thresh-line { position: absolute; left: 0; right: 0; bottom: 84px; border-top: 1px dashed var(--muted); }
-  .traj-meta { font-size: 10px; color: var(--muted); text-align: center; margin-top: 4px; line-height: 1.25; }
-  .traj-meta .sha { font-family: ui-monospace, monospace; color: var(--fg); }
-  .traj-thresh { font-size: 11px; color: var(--muted); margin-top: 8px; }
+  /* ----- trajectory result (SVG line + EMA) ----- */
+  .traj-card { padding: 18px; }
+  .traj-chart-wrap { overflow-x: auto; padding: 6px 4px; }
+  .traj-svg { display: block; min-width: 100%; }
+  .traj-line       { fill: none; stroke: var(--accent); stroke-width: 2; }
+  .traj-line-ema   { fill: none; stroke: #c084fc; stroke-width: 2; stroke-dasharray: 4 3; opacity: 0.85; }
+  .traj-thresh-svg { stroke: var(--muted); stroke-dasharray: 4 4; stroke-width: 1; }
+  .traj-axis       { stroke: var(--card-bd); stroke-width: 1; }
+  .traj-tick       { fill: var(--muted); font-size: 9px; }
+  .traj-point      { stroke: white; stroke-width: 1.5; cursor: pointer; transition: r 120ms ease; }
+  .traj-point:hover   { r: 7; }
+  .traj-point.accept  { fill: var(--accept); }
+  .traj-point.reject  { fill: var(--reject); }
+  .traj-point.failed  { fill: var(--card-bd); cursor: default; }
+  .traj-xtick { font-size: 9px; fill: var(--muted); font-family: ui-monospace, monospace; }
+  .traj-legend { font-size: 11px; color: var(--muted); margin-top: 8px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .traj-legend .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: middle; margin-right: 4px; }
+  .traj-legend .sw-line { background: var(--accent); }
+  .traj-legend .sw-ema  { background: #c084fc; }
+  .commit-drilldown { margin-top: 14px; }
+  .commit-drill-card { padding: 16px; }
+  .drill-header { font-size: 12px; color: var(--muted); margin: 0 0 10px 0; }
+  .drill-header .sha   { font-family: ui-monospace, monospace; color: var(--fg); font-weight: 600; margin-right: 8px; }
+  .drill-header .date  { margin-right: 10px; }
+  .drill-header .subject { color: var(--fg); }
 
   /* ----- server-side folder browser ----- */
   .latex-row input[readonly] { background: var(--code-bg); color: var(--fg); cursor: default; }
@@ -286,7 +322,17 @@
         <label class="opt"><input type="radio" name="gitmode" value="history"> History (git commits)</label>
         <p class="git-note" id="git-note"></p>
         <div id="commit-graph-wrap" class="commit-graph-wrap" style="display:none">
-          <div class="commit-graph" id="commit-graph"></div>
+          <p class="commit-graph-explainer" id="commit-graph-explainer"></p>
+          <div class="commit-graph-grid">
+            <div class="commit-row-labels">
+              <div class="rl bar">churn (lines)</div>
+              <div class="rl sha">Commit</div>
+              <div class="rl date">Date</div>
+              <div class="rl churn">Lines edited</div>
+              <div class="rl chk">Use?</div>
+            </div>
+            <div class="commit-graph" id="commit-graph"></div>
+          </div>
           <div class="graph-legend">
             <span>bar = .tex line churn · blue = selected (above 25th pct)</span>
             <span id="sel-summary"></span>
@@ -366,13 +412,13 @@ function refreshResultVisibility() {
     const hasContent = box.innerHTML.trim().length > 0;
     box.style.display = (m === CURRENT_MODE && hasContent) ? "block" : "none";
   });
-  // Widen the page only if the visible result wants the wide layout.
+  // Widen the page when the visible result wants it, OR when we're on the
+  // LaTeX tab (the churn-graph + trajectory want horizontal room from the
+  // moment you enter the tab, not just after a result lands).
   const active = resultBox(CURRENT_MODE);
-  if (active && active.dataset.wide === "1" && active.style.display !== "none") {
-    wrap.classList.add("wide");
-  } else {
-    wrap.classList.remove("wide");
-  }
+  const wantsWide = CURRENT_MODE === "latex"
+    || (active && active.dataset.wide === "1" && active.style.display !== "none");
+  wrap.classList.toggle("wide", !!wantsWide);
 }
 
 function renderStages(currentIdx, state) {
@@ -461,8 +507,9 @@ function renderError(err, mode) {
 
 /* ---------------- file explorer ---------------- */
 
-async function loadTree(jobId, box) {
-  const r = await fetch(`/jobs/${jobId}/tree`);
+async function loadTree(jobId, box, commit) {
+  const q = commit ? `?commit=${encodeURIComponent(commit)}` : "";
+  const r = await fetch(`/jobs/${jobId}/tree${q}`);
   if (!r.ok) throw new Error(`tree fetch failed: ${r.status}`);
   const tree = await r.json();
   const treeEl = box.querySelector(".explorer-tree");
@@ -472,11 +519,11 @@ async function loadTree(jobId, box) {
     head.className = "root-label";
     head.textContent = label + "/";
     treeEl.appendChild(head);
-    treeEl.appendChild(renderNode(node, jobId, box, /*topLevel=*/true));
+    treeEl.appendChild(renderNode(node, jobId, box, /*topLevel=*/true, commit));
   }
 }
 
-function renderNode(node, jobId, box, topLevel = false) {
+function renderNode(node, jobId, box, topLevel = false, commit) {
   const div = document.createElement("div");
   if (node.type === "truncated") {
     const t = document.createElement("span");
@@ -494,7 +541,7 @@ function renderNode(node, jobId, box, topLevel = false) {
     const kids = document.createElement("div");
     kids.className = "tree-children";
     if (!topLevel) kids.style.display = "none";
-    for (const c of node.children) kids.appendChild(renderNode(c, jobId, box));
+    for (const c of node.children) kids.appendChild(renderNode(c, jobId, box, false, commit));
     div.appendChild(kids);
     row.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -507,7 +554,7 @@ function renderNode(node, jobId, box, topLevel = false) {
       // its own tree).
       box.querySelectorAll(".tree-node.selected").forEach(n => n.classList.remove("selected"));
       row.classList.add("selected");
-      openFile(jobId, node.path, node.name, box);
+      openFile(jobId, node.path, node.name, box, commit);
     });
   } else if (node.type === "missing") {
     row.textContent = `⚠️ ${node.name} (missing)`;
@@ -516,10 +563,11 @@ function renderNode(node, jobId, box, topLevel = false) {
   return div;
 }
 
-async function openFile(jobId, path, name, box) {
+async function openFile(jobId, path, name, box, commit) {
   const view = box.querySelector(".explorer-view");
   const ext = (name.split(".").pop() || "").toLowerCase();
-  const url = `/jobs/${jobId}/file?path=${encodeURIComponent(path)}`;
+  const cq = commit ? `&commit=${encodeURIComponent(commit)}` : "";
+  const url = `/jobs/${jobId}/file?path=${encodeURIComponent(path)}${cq}`;
   const head = `<div class="filename-bar"><span class="name">${esc(name)}</span> &nbsp; ${esc(path)}</div>`;
   if (["png", "jpg", "jpeg", "gif", "webp"].includes(ext)) {
     view.innerHTML = head + `<img src="${url}" />`;
@@ -555,8 +603,9 @@ async function openFile(jobId, path, name, box) {
 
 /* ---------------- paperlens-input view ---------------- */
 
-async function loadPayload(jobId, box) {
-  const r = await fetch(`/jobs/${jobId}/payload`);
+async function loadPayload(jobId, box, commit) {
+  const q = commit ? `?commit=${encodeURIComponent(commit)}` : "";
+  const r = await fetch(`/jobs/${jobId}/payload${q}`);
   if (!r.ok) throw new Error(`payload fetch failed: ${r.status}`);
   const pl = await r.json();
   const pane = box.querySelector(".pane-paperlens");
@@ -569,8 +618,9 @@ async function loadPayload(jobId, box) {
 
   let imgsHtml = "";
   if (images.length) {
+    const cq = commit ? `&commit=${encodeURIComponent(commit)}` : "";
     imgsHtml = `<div class="image-grid">` + images.map((p, i) => {
-      const url = `/jobs/${jobId}/file?path=${encodeURIComponent(p)}`;
+      const url = `/jobs/${jobId}/file?path=${encodeURIComponent(p)}${cq}`;
       return `<figure><img src="${url}" /><figcaption>${esc(p.split("/").pop())}</figcaption></figure>`;
     }).join("") + `</div>`;
   } else {
@@ -655,32 +705,171 @@ function renderTrajectory(jobId, result, mode) {
   const box = resultBox(mode);
   box.dataset.wide = "1";
   const traj = result.trajectory || [];
-  const cols = traj.map((rec) => {
+
+  // Build the SVG line graph: x = commit chronological index, y = p_accept.
+  // EMA = exponentially-weighted moving average over `done` p_accept's,
+  // alpha = 0.4 (smooths over ~3 commits). Failed commits get a grey x
+  // glyph and break the main line into segments (gaps shouldn't be
+  // interpolated -- failed = no data, not zero).
+  const ALPHA = 0.4;
+  const W = Math.max(640, traj.length * 64);   // 64px per commit, min 640
+  const H = 240;
+  const M = { top: 18, right: 18, bottom: 44, left: 36 };
+  const PW = W - M.left - M.right;
+  const PH = H - M.top - M.bottom;
+  const N = traj.length;
+  const xs = (i) => M.left + (N <= 1 ? PW / 2 : (PW * i) / (N - 1));
+  const ys = (p) => M.top + PH - p * PH;
+
+  // EMA over the done sequence (in chronological order). Failed commits
+  // don't update the EMA -- skip them, so a transient compile failure
+  // doesn't pin the EMA at the last good value while time progresses.
+  let ema = null;
+  const emaPts = [];
+  traj.forEach((rec, i) => {
+    if (rec.state === "done") {
+      ema = ema === null ? rec.p_accept : ALPHA * rec.p_accept + (1 - ALPHA) * ema;
+      emaPts.push([i, ema]);
+    }
+  });
+
+  // Main line: connect consecutive done commits. Break the polyline at
+  // failed gaps so it doesn't fake a value where there isn't one.
+  const segments = [];
+  let cur = [];
+  traj.forEach((rec, i) => {
+    if (rec.state === "done") cur.push([i, rec.p_accept]);
+    else if (cur.length) { segments.push(cur); cur = []; }
+  });
+  if (cur.length) segments.push(cur);
+
+  const polylineFor = (pts) =>
+    pts.map(([i, v]) => `${xs(i).toFixed(1)},${ys(v).toFixed(1)}`).join(" ");
+
+  const linesSvg = segments.map((pts) =>
+    `<polyline class="traj-line" points="${polylineFor(pts)}" />`).join("");
+  const emaSvg = emaPts.length >= 2
+    ? `<polyline class="traj-line-ema" points="${polylineFor(emaPts)}" />`
+    : "";
+  const threshY = ys(0.5).toFixed(1);
+  const xticks = traj.map((rec, i) => {
+    // Skip every other tick when crowded, keep first + last.
+    const stride = Math.max(1, Math.ceil(N / 10));
+    if (!(i === 0 || i === N - 1 || i % stride === 0)) return "";
+    const x = xs(i).toFixed(1);
+    return `<text class="traj-xtick" x="${x}" y="${(H - M.bottom + 14).toFixed(1)}" text-anchor="middle">${esc(rec.short)}</text>`
+         + `<text class="traj-xtick" x="${x}" y="${(H - M.bottom + 28).toFixed(1)}" text-anchor="middle" style="opacity:.7">${esc(rec.date || "")}</text>`;
+  }).join("");
+  const yticks = [0, 0.25, 0.5, 0.75, 1].map((p) => {
+    const y = ys(p).toFixed(1);
+    return `<text class="traj-tick" x="${(M.left - 6).toFixed(1)}" y="${y}" text-anchor="end" dominant-baseline="middle">${p.toFixed(2)}</text>`
+         + `<line class="traj-axis" x1="${M.left}" y1="${y}" x2="${(M.left + PW).toFixed(1)}" y2="${y}" style="opacity:${p === 0.5 ? 0 : 0.25}"/>`;
+  }).join("");
+  const points = traj.map((rec, i) => {
     const done = rec.state === "done";
-    const pa = done ? rec.p_accept : null;
     const cls = !done ? "failed" : (rec.decision === "Accept" ? "accept" : "reject");
-    const h = done ? Math.max(2, Math.round(168 * pa)) : 6;
-    const val = done ? pa.toFixed(2) : "—";
-    const tip = done ? `${rec.decision} · p_accept=${pa}` : (rec.state + (rec.error ? ": " + rec.error : ""));
-    return `<div class="traj-col">
-      <div class="traj-bar-area">
-        <div class="thresh-line"></div>
-        <div class="traj-stack">
-          <div class="traj-val">${val}</div>
-          <div class="traj-bar ${cls}" style="height:${h}px" title="${esc(tip)}"></div>
+    const y = done ? ys(rec.p_accept) : (H - M.bottom - 4);   // failed = bottom rail
+    const tip = done
+      ? `${rec.short} · ${rec.date || ""} · ${rec.decision} p_accept=${rec.p_accept}`
+      : `${rec.short} · ${rec.state}${rec.error ? ": " + rec.error : ""}`;
+    return `<circle class="traj-point ${cls}" cx="${xs(i).toFixed(1)}" cy="${y.toFixed(1)}" r="5" data-idx="${i}"><title>${esc(tip)}</title></circle>`;
+  }).join("");
+
+  box.innerHTML = `<div class="card traj-card">
+    <h2 style="font-size:20px;margin:0 0 4px 0">Commit trajectory · ${esc(result.modality)}/${esc(result.domain)}</h2>
+    <p class="sub" style="margin:0 0 10px 0">${result.n_scored}/${result.n_commits} commits scored · p_accept across <code>.tex</code> history (oldest → newest) · click any point to drill in.</p>
+    <div class="traj-chart-wrap">
+      <svg class="traj-svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" preserveAspectRatio="xMinYMin meet">
+        ${yticks}
+        <line class="traj-thresh-svg" x1="${M.left}" y1="${threshY}" x2="${(M.left + PW).toFixed(1)}" y2="${threshY}" />
+        ${linesSvg}
+        ${emaSvg}
+        ${points}
+        ${xticks}
+      </svg>
+    </div>
+    <div class="traj-legend">
+      <span><span class="swatch sw-line"></span>p_accept</span>
+      <span><span class="swatch sw-ema"></span>EMA (α=${ALPHA})</span>
+      <span><span class="swatch" style="background:var(--accept)"></span>Accept</span>
+      <span><span class="swatch" style="background:var(--reject)"></span>Reject</span>
+      <span><span class="swatch" style="background:var(--card-bd)"></span>failed</span>
+      <span>dashed = 0.5 threshold</span>
+    </div>
+    <div class="commit-drilldown"></div>
+    <details style="margin-top:10px"><summary>raw trajectory JSON</summary><pre>${esc(JSON.stringify(result.trajectory, null, 2))}</pre></details>
+  </div>`;
+
+  // Click-to-drill: each point opens the per-commit detail panel below.
+  box.querySelectorAll(".traj-point").forEach((c) => {
+    if (c.classList.contains("failed")) return;   // nothing to drill into
+    c.addEventListener("click", () => renderCommitDrilldown(jobId, result, +c.dataset.idx, mode));
+  });
+
+  // Auto-open the first scored commit so the drilldown isn't empty on load.
+  const firstDone = traj.findIndex((r) => r.state === "done");
+  if (firstDone >= 0) renderCommitDrilldown(jobId, result, firstDone, mode);
+
+  refreshResultVisibility();
+}
+
+function renderCommitDrilldown(jobId, result, idx, mode) {
+  const rec = (result.trajectory || [])[idx];
+  if (!rec || rec.state !== "done") return;
+  const box = resultBox(mode);
+  const dl = box.querySelector(".commit-drilldown");
+  if (!dl) return;
+  const cls = rec.decision === "Accept" ? "accept" : "reject";
+  dl.innerHTML = `
+    <div class="card commit-drill-card">
+      <p class="drill-header">
+        <span class="sha">${esc(rec.short)}</span>
+        <span class="date">${esc(rec.date || "")}</span>
+        <span class="subject">${esc(rec.subject || "")}</span>
+      </p>
+      <div class="tabs">
+        <button class="tab active" data-tab="verdict">Verdict</button>
+        <button class="tab" data-tab="files">Files</button>
+        <button class="tab" data-tab="paperlens">PaperLens input</button>
+      </div>
+      <div class="pane active" data-tab="verdict">
+        <div class="verdict ${cls}">
+          <div>
+            <h2>${rec.decision}</h2>
+            <div class="p">p_accept = ${rec.p_accept.toFixed(4)} &middot; ${esc(result.modality)} / ${esc(result.domain)}${rec.body_pages ? " · " + rec.body_pages + " body pages" : ""}</div>
+          </div>
+        </div>
+        <details><summary>raw rec</summary><pre>${esc(JSON.stringify(rec, null, 2))}</pre></details>
+      </div>
+      <div class="pane" data-tab="files">
+        <div class="explorer">
+          <div class="explorer-tree"><em>loading…</em></div>
+          <div class="explorer-view"><div class="empty">Pick a file in the tree.</div></div>
         </div>
       </div>
-      <div class="traj-meta"><span class="sha">${esc(rec.short)}</span><br>${esc(rec.date || "")}<br>${esc((rec.subject || "").slice(0, 22))}</div>
-    </div>`;
-  }).join("");
-  box.innerHTML = `<div class="card">
-    <h2 style="font-size:20px;margin:0 0 4px 0">Commit trajectory · ${esc(result.modality)}/${esc(result.domain)}</h2>
-    <p class="sub" style="margin:0 0 10px 0">${result.n_scored}/${result.n_commits} commits scored · p_accept across .tex history (oldest → newest)</p>
-    <div class="traj"><div class="traj-row">${cols}</div></div>
-    <p class="traj-thresh">bar height = p_accept · <span style="color:var(--accept)">green=Accept</span>, <span style="color:var(--reject)">red=Reject</span>, grey=failed · dashed line = 0.5 threshold</p>
-    <details><summary>raw trajectory JSON</summary><pre>${esc(JSON.stringify(result.trajectory, null, 2))}</pre></details>
-  </div>`;
-  refreshResultVisibility();
+      <div class="pane pane-paperlens" data-tab="paperlens">
+        <div class="empty">loading…</div>
+      </div>
+    </div>
+  `;
+  // Tab wiring scoped to this drilldown (multiple drilldowns can exist
+  // across persistent result tabs without interfering).
+  dl.querySelectorAll(".tab").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      dl.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b === btn));
+      dl.querySelectorAll(".pane").forEach((p) => p.classList.toggle("active", p.dataset.tab === btn.dataset.tab));
+    });
+  });
+  // Files + PaperLens input scoped to *this commit's* paperprep dirs via
+  // the new ?commit=<short> query param on the file endpoints.
+  loadTree(jobId, dl, rec.short).catch((e) => {
+    const t = dl.querySelector(".explorer-tree");
+    if (t) t.innerHTML = `<div class="err">${esc(String(e))}</div>`;
+  });
+  loadPayload(jobId, dl, rec.short).catch((e) => {
+    const p = dl.querySelector(".pane-paperlens");
+    if (p) p.innerHTML = `<div class="err">${esc(String(e))}</div>`;
+  });
 }
 
 /* ---------------- shared submit / progress reset ---------------- */
@@ -752,24 +941,48 @@ function updateSelSummary() {
 }
 
 function renderCommitGraph(h) {
+  // Explainer above the graph: spell out the jargon (mean churn / 25th pct)
+  // so the cyan "selected" coloring isn't a mystery on first view.
+  const exp = $("commit-graph-explainer");
+  if (exp) {
+    exp.innerHTML = `
+      <b>Lines edited</b> = sum of added + deleted lines in <code>*.tex</code> per commit.
+      The last <b>${h.n}</b> commits that touched <code>*.tex</code> are shown
+      (oldest&nbsp;→&nbsp;newest). The dataset's <b>mean churn = ${h.mean_churn.toFixed(0)}</b>,
+      <b>25<sup>th</sup>-percentile = ${h.p25_churn.toFixed(0)}</b>. Commits with
+      churn above the 25<sup>th</sup> percentile are pre-checked (cyan bars) so
+      trivial typo commits don't pollute the trajectory — uncheck any you don't
+      want, check anything you do.
+    `;
+  }
   const g = $("commit-graph");
   g.innerHTML = "";
   const maxC = Math.max(1, ...h.commits.map((c) => c.churn));
   h.commits.forEach((c) => {
     const col = document.createElement("div"); col.className = "commit-col";
+    // Bar area
     const area = document.createElement("div"); area.className = "commit-bar-area";
     const barEl = document.createElement("div");
     barEl.className = "commit-bar" + (c.above_p25 ? " sel" : "");
     barEl.style.height = Math.max(2, Math.round(118 * c.churn / maxC)) + "px";
     barEl.title = `${c.short} · churn ${c.churn} · ${c.subject}`;
     area.appendChild(barEl);
-    const m = document.createElement("div"); m.className = "commit-meta";
-    m.innerHTML = `<span class="sha">${esc(c.short)}</span><br>${esc(c.date || "")}<br>${c.churn}`;
+    // Each row of the per-commit column is its own element so the left-side
+    // labels column ("Commit / Date / Lines edited / Use?") line-aligns.
+    const sha   = document.createElement("div"); sha.className   = "c-sha";   sha.textContent   = c.short;
+    const date  = document.createElement("div"); date.className  = "c-date";  date.textContent  = c.date || "";
+    const churn = document.createElement("div"); churn.className = "c-churn"; churn.textContent = c.churn;
+    const chkBox = document.createElement("div"); chkBox.className = "c-chk";
     const chk = document.createElement("input"); chk.type = "checkbox"; chk.checked = !!c.above_p25;
+    chkBox.appendChild(chk);
     const sync = () => { barEl.classList.toggle("sel", chk.checked); updateSelSummary(); };
     chk.addEventListener("change", sync);
     barEl.addEventListener("click", () => { chk.checked = !chk.checked; sync(); });
-    col.appendChild(area); col.appendChild(m); col.appendChild(chk);
+    col.appendChild(area);
+    col.appendChild(sha);
+    col.appendChild(date);
+    col.appendChild(churn);
+    col.appendChild(chkBox);
     g.appendChild(col);
     c._chk = chk;
   });
