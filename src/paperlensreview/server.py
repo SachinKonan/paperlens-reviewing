@@ -430,6 +430,7 @@ def job_payload(job_id: str) -> dict:
 # --------- Entry point ---------
 
 def run_uvicorn(cfg_path: str, host: Optional[str] = None, port: Optional[int] = None) -> int:
+    import re
     import uvicorn
     cfg = OmegaConf.load(cfg_path)
     host = host or cfg.server.host
@@ -438,6 +439,23 @@ def run_uvicorn(cfg_path: str, host: Optional[str] = None, port: Optional[int] =
     log_level = str(cfg.get("logging", {}).get("level", "INFO")).lower()
     logging.basicConfig(level=log_level.upper(),
                         format="%(asctime)s %(name)s %(levelname)s: %(message)s")
+
+    # Browsers poll /status/<jobid> every 1.5s while a job runs, so a single
+    # latex_history job emits ~40 access lines per minute and buries the
+    # actually-interesting log events. Drop those (and per-job tree/file/payload
+    # GETs, which fire repeatedly when the file-explorer panel is open) from
+    # the uvicorn access log. Real submits, /health, and the initial GET / are
+    # all kept.
+    _NOISE_RE = re.compile(
+        r' "GET /(?:status/[^"]*|jobs/[^"]+/(?:tree|file|payload)[^"]*) HTTP/'
+    )
+
+    class _DropPollNoise(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:  # True = keep
+            return _NOISE_RE.search(record.getMessage()) is None
+
+    logging.getLogger("uvicorn.access").addFilter(_DropPollNoise())
+
     log.info("paperlensreview binding %s:%s", host, port)
     uvicorn.run(app, host=host, port=port, log_level=log_level)
     return 0
