@@ -320,13 +320,19 @@
   <div class="meta" id="progress-meta"></div>
 </div>
 
-<div id="verdict-box" style="display:none"></div>
+<!-- Per-tab result containers: each tab keeps its own result alive while you
+     switch modes, so a 14-commit history doesn't vanish when you peek at PDF. -->
+<div id="result-pdf"   class="result-box" style="display:none"></div>
+<div id="result-latex" class="result-box" style="display:none"></div>
+<div id="result-arxiv" class="result-box" style="display:none"></div>
 
 </div>
 
 <script>
 let STAGES = ["paperprep", "paperlens_score"];
 const STAGE_LABELS = {
+  download: "Fetching arXiv source",
+  latex_extraction: "Extracting LaTeX tarball",
   paperprep: "paperprep (mineru + normalize + filter + export)",
   paperlens_score: "PaperLens score",
   mineru: "OCR (MinerU)",
@@ -341,11 +347,33 @@ const progressMeta = $("progress-meta");
 const progressBox = $("progress");
 const bar = $("bar-fill");
 const stagesEl = $("stages");
-const verdictBox = $("verdict-box");
 const wrap = $("wrap");
 
-let CURRENT_MODE = "pdf";   // "pdf" | "latex"
+let CURRENT_MODE = "pdf";   // "pdf" | "latex" | "arxiv"
 let PROBE = null;           // last /probe_latex response (holds history.commits)
+
+// Per-tab result container — each mode keeps its own result alive while
+// you switch tabs, so a long history trajectory or a per-commit drilldown
+// doesn't vanish when you peek at another tab.
+function resultBox(mode) { return $(`result-${mode}`); }
+
+// Show only the current mode's result, hiding the others. Called on every
+// tab switch + after each beginJob/render.
+function refreshResultVisibility() {
+  ["pdf", "latex", "arxiv"].forEach((m) => {
+    const box = resultBox(m);
+    if (!box) return;
+    const hasContent = box.innerHTML.trim().length > 0;
+    box.style.display = (m === CURRENT_MODE && hasContent) ? "block" : "none";
+  });
+  // Widen the page only if the visible result wants the wide layout.
+  const active = resultBox(CURRENT_MODE);
+  if (active && active.dataset.wide === "1" && active.style.display !== "none") {
+    wrap.classList.add("wide");
+  } else {
+    wrap.classList.remove("wide");
+  }
+}
 
 function renderStages(currentIdx, state) {
   stagesEl.innerHTML = "";
@@ -371,18 +399,19 @@ function fmtSize(n) {
   return (n/(1024*1024)).toFixed(2) + " MB";
 }
 
-async function renderVerdict(jobId, result) {
-  wrap.classList.add("wide");
-  verdictBox.style.display = "block";
+async function renderVerdict(jobId, result, mode) {
+  const box = resultBox(mode);
+  box.dataset.wide = "1";
+  box.style.display = "block";
   const cls = result.decision === "Accept" ? "accept" : "reject";
-  verdictBox.innerHTML = `
+  box.innerHTML = `
     <div class="card">
       <div class="tabs">
         <button class="tab active" data-tab="verdict">Verdict</button>
         <button class="tab" data-tab="files">Files</button>
         <button class="tab" data-tab="paperlens">PaperLens input</button>
       </div>
-      <div class="pane active" id="pane-verdict">
+      <div class="pane active" data-tab="verdict">
         <div class="verdict ${cls}">
           <div>
             <h2>${result.decision}</h2>
@@ -391,53 +420,63 @@ async function renderVerdict(jobId, result) {
         </div>
         <details><summary>raw result</summary><pre>${esc(JSON.stringify(result, null, 2))}</pre></details>
       </div>
-      <div class="pane" id="pane-files">
+      <div class="pane" data-tab="files">
         <div class="explorer">
-          <div class="explorer-tree" id="explorer-tree"><em>loading…</em></div>
-          <div class="explorer-view" id="explorer-view"><div class="empty">Pick a file in the tree.</div></div>
+          <div class="explorer-tree"><em>loading…</em></div>
+          <div class="explorer-view"><div class="empty">Pick a file in the tree.</div></div>
         </div>
       </div>
-      <div class="pane" id="pane-paperlens">
+      <div class="pane pane-paperlens" data-tab="paperlens">
         <div class="empty">loading…</div>
       </div>
     </div>
   `;
-  // Tab wiring
-  verdictBox.querySelectorAll(".tab").forEach((btn) => {
+  // Tab wiring -- scoped to THIS result box so multiple persistent result
+  // boxes (one per mode) don't fight each other for the same selectors.
+  box.querySelectorAll(".tab").forEach((btn) => {
     btn.addEventListener("click", () => {
-      verdictBox.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b === btn));
+      box.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b === btn));
       const which = btn.dataset.tab;
-      verdictBox.querySelectorAll(".pane").forEach(p => p.classList.toggle("active", p.id === `pane-${which}`));
+      box.querySelectorAll(".pane").forEach(p => p.classList.toggle("active", p.dataset.tab === which));
     });
   });
-  // Lazy-load tree + payload
-  loadTree(jobId).catch(e => $("explorer-tree").innerHTML = `<div class="err">${esc(String(e))}</div>`);
-  loadPayload(jobId).catch(e => $("pane-paperlens").innerHTML = `<div class="err">${esc(String(e))}</div>`);
+  // Lazy-load tree + payload (each scoped to this box).
+  loadTree(jobId, box).catch((e) => {
+    const t = box.querySelector(".explorer-tree");
+    if (t) t.innerHTML = `<div class="err">${esc(String(e))}</div>`;
+  });
+  loadPayload(jobId, box).catch((e) => {
+    const p = box.querySelector(".pane-paperlens");
+    if (p) p.innerHTML = `<div class="err">${esc(String(e))}</div>`;
+  });
+  refreshResultVisibility();
 }
 
-function renderError(err) {
-  verdictBox.style.display = "block";
-  verdictBox.innerHTML = `<div class="err">${esc(err)}</div>`;
+function renderError(err, mode) {
+  const box = resultBox(mode || CURRENT_MODE);
+  box.dataset.wide = "";
+  box.innerHTML = `<div class="err">${esc(err)}</div>`;
+  refreshResultVisibility();
 }
 
 /* ---------------- file explorer ---------------- */
 
-async function loadTree(jobId) {
+async function loadTree(jobId, box) {
   const r = await fetch(`/jobs/${jobId}/tree`);
   if (!r.ok) throw new Error(`tree fetch failed: ${r.status}`);
   const tree = await r.json();
-  const treeEl = $("explorer-tree");
+  const treeEl = box.querySelector(".explorer-tree");
   treeEl.innerHTML = "";
   for (const [label, node] of Object.entries(tree)) {
     const head = document.createElement("div");
     head.className = "root-label";
     head.textContent = label + "/";
     treeEl.appendChild(head);
-    treeEl.appendChild(renderNode(node, jobId, /*topLevel=*/true));
+    treeEl.appendChild(renderNode(node, jobId, box, /*topLevel=*/true));
   }
 }
 
-function renderNode(node, jobId, topLevel = false) {
+function renderNode(node, jobId, box, topLevel = false) {
   const div = document.createElement("div");
   if (node.type === "truncated") {
     const t = document.createElement("span");
@@ -455,7 +494,7 @@ function renderNode(node, jobId, topLevel = false) {
     const kids = document.createElement("div");
     kids.className = "tree-children";
     if (!topLevel) kids.style.display = "none";
-    for (const c of node.children) kids.appendChild(renderNode(c, jobId));
+    for (const c of node.children) kids.appendChild(renderNode(c, jobId, box));
     div.appendChild(kids);
     row.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -464,9 +503,11 @@ function renderNode(node, jobId, topLevel = false) {
   } else if (node.type === "file") {
     row.addEventListener("click", (e) => {
       e.stopPropagation();
-      document.querySelectorAll(".tree-node.selected").forEach(n => n.classList.remove("selected"));
+      // Scope selected-state clearing to THIS result box (each mode tab has
+      // its own tree).
+      box.querySelectorAll(".tree-node.selected").forEach(n => n.classList.remove("selected"));
       row.classList.add("selected");
-      openFile(jobId, node.path, node.name);
+      openFile(jobId, node.path, node.name, box);
     });
   } else if (node.type === "missing") {
     row.textContent = `⚠️ ${node.name} (missing)`;
@@ -475,8 +516,8 @@ function renderNode(node, jobId, topLevel = false) {
   return div;
 }
 
-async function openFile(jobId, path, name) {
-  const view = $("explorer-view");
+async function openFile(jobId, path, name, box) {
+  const view = box.querySelector(".explorer-view");
   const ext = (name.split(".").pop() || "").toLowerCase();
   const url = `/jobs/${jobId}/file?path=${encodeURIComponent(path)}`;
   const head = `<div class="filename-bar"><span class="name">${esc(name)}</span> &nbsp; ${esc(path)}</div>`;
@@ -514,11 +555,11 @@ async function openFile(jobId, path, name) {
 
 /* ---------------- paperlens-input view ---------------- */
 
-async function loadPayload(jobId) {
+async function loadPayload(jobId, box) {
   const r = await fetch(`/jobs/${jobId}/payload`);
   if (!r.ok) throw new Error(`payload fetch failed: ${r.status}`);
   const pl = await r.json();
-  const pane = $("pane-paperlens");
+  const pane = box.querySelector(".pane-paperlens");
   const row = pl.row || {};
   const convs = row.conversations || [];
   const sys = (convs.find(c => c.from === "system") || {}).value || "";
@@ -569,15 +610,19 @@ metadata: ${esc(JSON.stringify(row._metadata || {}, null, 2))}</pre>
 
 /* ---------------- polling ---------------- */
 
-async function poll(job_id) {
+async function poll(job_id, mode) {
   let lastStage = null;
   while (true) {
     const r = await fetch(`/status/${job_id}`);
     if (!r.ok) {
-      renderError(`status fetch failed: ${r.status} ${r.statusText}`);
+      renderError(`status fetch failed: ${r.status} ${r.statusText}`, mode);
       return;
     }
     const s = await r.json();
+    // Per-job stage list arrives in the status payload (server-side it lives
+    // on JobStatus.stages and round-trips through to_dict). The submit
+    // response also sets the global STAGES the moment a job starts.
+    if (Array.isArray(s.stages) && s.stages.length) STAGES = s.stages;
     const idx = Math.max(0, s.stage_index);
     const total = s.total_stages || STAGES.length;
     const pct = s.state === "done" ? 100 : Math.min(99, Math.round((idx / total) * 100));
@@ -590,14 +635,14 @@ async function poll(job_id) {
     if (s.state === "done") {
       bar.style.width = "100%";
       if (s.result && s.result.source_type === "latex_history") {
-        renderTrajectory(job_id, s.result);
+        renderTrajectory(job_id, s.result, mode);
       } else {
-        await renderVerdict(job_id, s.result);
+        await renderVerdict(job_id, s.result, mode);
       }
       return;
     }
     if (s.state === "error") {
-      renderError(s.error || "unknown error");
+      renderError(s.error || "unknown error", mode);
       return;
     }
     await new Promise(r => setTimeout(r, 1500));
@@ -606,9 +651,9 @@ async function poll(job_id) {
 
 /* ---------------- commit-history trajectory result ---------------- */
 
-function renderTrajectory(jobId, result) {
-  wrap.classList.add("wide");
-  verdictBox.style.display = "block";
+function renderTrajectory(jobId, result, mode) {
+  const box = resultBox(mode);
+  box.dataset.wide = "1";
   const traj = result.trajectory || [];
   const cols = traj.map((rec) => {
     const done = rec.state === "done";
@@ -628,13 +673,14 @@ function renderTrajectory(jobId, result) {
       <div class="traj-meta"><span class="sha">${esc(rec.short)}</span><br>${esc(rec.date || "")}<br>${esc((rec.subject || "").slice(0, 22))}</div>
     </div>`;
   }).join("");
-  verdictBox.innerHTML = `<div class="card">
+  box.innerHTML = `<div class="card">
     <h2 style="font-size:20px;margin:0 0 4px 0">Commit trajectory · ${esc(result.modality)}/${esc(result.domain)}</h2>
     <p class="sub" style="margin:0 0 10px 0">${result.n_scored}/${result.n_commits} commits scored · p_accept across .tex history (oldest → newest)</p>
     <div class="traj"><div class="traj-row">${cols}</div></div>
     <p class="traj-thresh">bar height = p_accept · <span style="color:var(--accept)">green=Accept</span>, <span style="color:var(--reject)">red=Reject</span>, grey=failed · dashed line = 0.5 threshold</p>
     <details><summary>raw trajectory JSON</summary><pre>${esc(JSON.stringify(result.trajectory, null, 2))}</pre></details>
   </div>`;
+  refreshResultVisibility();
 }
 
 /* ---------------- shared submit / progress reset ---------------- */
@@ -643,19 +689,23 @@ function renderTrajectory(jobId, result) {
 // selection, no second submit, until the run finishes (done or error).
 function setBusy(b) { $("input-card").classList.toggle("locked", b); }
 
-function beginJob(historyMode) {
-  verdictBox.style.display = "none";
-  verdictBox.innerHTML = "";
-  wrap.classList.remove("wide");
+function beginJob(historyMode, mode) {
+  // Clear only the active tab's result. Other tabs keep their previous
+  // results so a history trajectory or a verdict survives tab switching.
+  const box = resultBox(mode || CURRENT_MODE);
+  box.style.display = "none";
+  box.innerHTML = "";
+  box.dataset.wide = "";
+  refreshResultVisibility();
   progressBox.style.display = "block";
   bar.style.width = "0%";
   stagesEl.style.display = historyMode ? "none" : "flex";
   setBusy(true);
 }
 
-async function afterSubmit(resp) {
+async function afterSubmit(resp, mode) {
   if (Array.isArray(resp.stages) && resp.stages.length) STAGES = resp.stages;
-  await poll(resp.job_id);
+  await poll(resp.job_id, mode);
 }
 
 /* ---------------- input-mode toggle ---------------- */
@@ -665,6 +715,9 @@ document.querySelectorAll(".mode-btn").forEach((btn) => {
     CURRENT_MODE = btn.dataset.mode;
     document.querySelectorAll(".mode-btn").forEach((b) => b.classList.toggle("active", b === btn));
     document.querySelectorAll(".mode-pane").forEach((p) => p.classList.toggle("active", p.id === `mode-${CURRENT_MODE}`));
+    // Show this tab's stored result (if any); hide the others. A history
+    // trajectory built earlier in the LaTeX tab survives a peek at PDF/arXiv.
+    refreshResultVisibility();
   });
 });
 
@@ -675,15 +728,15 @@ $("submit").addEventListener("click", async () => {
   if (!f) { meta.textContent = "pick a PDF first"; return; }
   meta.textContent = `uploading ${f.name} (${(f.size/1024).toFixed(1)} KB) ...`;
   $("submit").disabled = true;
-  beginJob(false);
+  beginJob(false, "pdf");
   try {
     const body = new FormData();
     body.append("file", f);
     const r = await fetch("/submit", { method: "POST", body });
-    if (!r.ok) { renderError(`submit failed: ${r.status} ${await r.text()}`); return; }
+    if (!r.ok) { renderError(`submit failed: ${r.status} ${await r.text()}`, "pdf"); return; }
     const resp = await r.json();
     meta.textContent = `submitted job ${resp.job_id}`;
-    await afterSubmit(resp);
+    await afterSubmit(resp, "pdf");
   } finally {
     $("submit").disabled = false;
     setBusy(false);
@@ -846,16 +899,16 @@ $("submit-latex").addEventListener("click", async () => {
   }
   $("submit-latex").disabled = true;
   lm.textContent = mode === "history" ? `scoring ${commits.length} commits …` : "submitting …";
-  beginJob(isHistory);
+  beginJob(isHistory, "latex");
   try {
     const r = await fetch("/submit_latex", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path, main_tex: mainTex || null, mode, commits }),
     });
-    if (!r.ok) { renderError(`submit failed: ${r.status} ${await r.text()}`); return; }
+    if (!r.ok) { renderError(`submit failed: ${r.status} ${await r.text()}`, "latex"); return; }
     const resp = await r.json();
     lm.textContent = `submitted job ${resp.job_id} (${resp.mode})`;
-    await afterSubmit(resp);
+    await afterSubmit(resp, "latex");
   } finally {
     $("submit-latex").disabled = false;
     setBusy(false);
@@ -871,16 +924,16 @@ $("submit-arxiv").addEventListener("click", async () => {
   const mainTex = $("arxiv-main-tex").value.trim();
   $("submit-arxiv").disabled = true;
   am.textContent = `fetching ${aid} …`;
-  beginJob(false);
+  beginJob(false, "arxiv");
   try {
     const r = await fetch("/submit_arxiv", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ arxiv_id: aid, main_tex: mainTex || null }),
     });
-    if (!r.ok) { renderError(`submit failed: ${r.status} ${await r.text()}`); return; }
+    if (!r.ok) { renderError(`submit failed: ${r.status} ${await r.text()}`, "arxiv"); return; }
     const resp = await r.json();
     am.textContent = `submitted job ${resp.job_id} (arxiv ${resp.arxiv_id})`;
-    await afterSubmit(resp);
+    await afterSubmit(resp, "arxiv");
   } finally {
     $("submit-arxiv").disabled = false;
     setBusy(false);

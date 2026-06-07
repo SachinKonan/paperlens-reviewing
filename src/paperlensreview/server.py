@@ -30,7 +30,13 @@ from . import latexsrc
 from .pipeline import (
     JobRegistry, JobStatus, STAGES,
     run_job, run_latex_job, run_latex_history_job,
+    _enter_stage,
 )
+
+
+# /submit_arxiv prepends two stages to the standard pipeline so the UI's
+# stage bar shows fetch + extract before paperprep+score.
+STAGES_ARXIV = ["download", "latex_extraction"] + STAGES
 
 
 log = logging.getLogger(__name__)
@@ -157,6 +163,13 @@ def submit_arxiv(req: SubmitArxivReq) -> dict:
     status = _state["jobs"].create(job_id)
     log.info("[/submit_arxiv] job=%s arxiv_id=%s main_tex=%s", job_id, aid, req.main_tex)
 
+    # Pre-set the stage list so the UI's stage bar shows 4 boxes
+    # (download -> latex_extraction -> paperprep -> paperlens_score) instead of 2.
+    # _enter_stage uses status.stages to compute stage_index, so the indices
+    # land correctly even though run_latex_job emits the trailing 2 stages.
+    status.stages = list(STAGES_ARXIV)
+    status.total_stages = len(STAGES_ARXIV)
+
     def _runner():
         with _state["job_lock"]:
             job_dir = _state["work_dir"] / job_id
@@ -165,15 +178,16 @@ def submit_arxiv(req: SubmitArxivReq) -> dict:
             gz_path = job_dir / f"{aid.replace('/', '_')}.gz"
             status.state = "running"
             status.started_at = _time.time()
-            status.stage = f"fetching arxiv {aid}"
-            status.stage_log.append({"t": _time.time(), "stage": status.stage, "via": "arxiv"})
             try:
+                _enter_stage(status, "download", via="arxiv")
                 _arxiv.download_source(aid, gz_path)
+                _enter_stage(status, "latex_extraction", via="arxiv")
                 if not _arxiv.extract_source(gz_path, src_dir):
                     raise RuntimeError(f"could not extract {gz_path} (unrecognized archive shape)")
                 main_tex = req.main_tex or latexsrc.find_main_tex(src_dir)
-                # Hand off to the existing latex-dir pipeline. It will set
-                # status.state/stage and call paperprep/paperlens-serve.
+                # Hand off to the existing latex-dir pipeline. It calls
+                # _enter_stage("paperprep") then ("paperlens_score") which
+                # resolve to indices 2 / 3 against our 4-stage list.
                 run_latex_job(_state["cfg"], status, _state["work_dir"], src_dir, main_tex)
                 # Mark the source on the result so the UI knows it was arxiv-sourced.
                 if status.result is not None:
@@ -187,7 +201,7 @@ def submit_arxiv(req: SubmitArxivReq) -> dict:
 
     t = threading.Thread(target=_runner, daemon=True, name=f"job-{job_id}")
     t.start()
-    return {"job_id": job_id, "stages": STAGES, "submitted_at": status.started_at,
+    return {"job_id": job_id, "stages": STAGES_ARXIV, "submitted_at": status.started_at,
             "arxiv_id": aid, "mode": "arxiv"}
 
 

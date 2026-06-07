@@ -39,14 +39,19 @@ STAGES: list[str] = ["paperprep", "paperlens_score"]
 class JobStatus:
     job_id: str
     state: str = "queued"               # queued | running | done | error
-    stage: Optional[str] = None         # one of STAGES (or None before start / "done")
-    stage_index: int = -1               # 0..len(STAGES)-1 (or -1 / len(STAGES))
+    stage: Optional[str] = None         # one of `stages` (or None before start / "done")
+    stage_index: int = -1               # 0..len(stages)-1 (or -1 / len(stages))
     total_stages: int = len(STAGES)
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
     error: Optional[str] = None
     result: Optional[dict] = None       # final decision (decision, p_accept, ...)
     stage_log: list[dict] = field(default_factory=list)   # one entry per stage transition
+    # Per-job stage list -- defaults to the standard 2-stage PDF/LaTeX path.
+    # The arxiv flow prepends "download" + "latex_extraction", and the history
+    # flow leaves this alone and just overrides total_stages with the commit
+    # count. _enter_stage uses this list to compute stage_index correctly.
+    stages: list[str] = field(default_factory=lambda: list(STAGES))
 
     def to_dict(self) -> dict:
         return {
@@ -60,6 +65,7 @@ class JobStatus:
             "error": self.error,
             "result": self.result,
             "stage_log": list(self.stage_log),
+            "stages": list(self.stages),
         }
 
 
@@ -92,9 +98,9 @@ class JobRegistry:
 def _enter_stage(status: JobStatus, stage: str, via: str = "transition") -> None:
     status.stage = stage
     try:
-        status.stage_index = STAGES.index(stage)
+        status.stage_index = status.stages.index(stage)
     except ValueError:
-        status.stage_index = len(STAGES)
+        status.stage_index = len(status.stages)
     status.stage_log.append({"t": time.time(), "stage": stage, "via": via})
 
 
