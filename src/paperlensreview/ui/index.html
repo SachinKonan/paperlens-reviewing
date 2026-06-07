@@ -252,6 +252,28 @@
   .drill-header .date  { margin-right: 10px; }
   .drill-header .subject { color: var(--fg); }
 
+  /* ----- try-me example blocks (per-tab <details>) ----- */
+  .example-details {
+    margin-top: 14px; padding-top: 12px;
+    border-top: 1px dashed var(--card-bd);
+    font-size: 12px; color: var(--muted);
+  }
+  .example-details summary {
+    cursor: pointer; color: var(--accent); font-weight: 500;
+    list-style: none; padding: 2px 0;
+  }
+  .example-details summary::before { content: "▶ "; font-size: 10px; }
+  .example-details[open] summary::before { content: "▼ "; }
+  .example-body { margin-top: 8px; line-height: 1.55; }
+  .example-body code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; font-size: 11px; }
+  .example-body pre {
+    background: var(--code-bg); padding: 9px 12px; border-radius: 4px;
+    font-size: 11px; line-height: 1.5; overflow-x: auto;
+    margin: 6px 0;
+  }
+  .example-body a { color: var(--accent); text-decoration: none; }
+  .example-body a:hover { text-decoration: underline; }
+
   /* ----- server-side folder browser ----- */
   .latex-row input[readonly] { background: var(--code-bg); color: var(--fg); cursor: default; }
   .dir-browser {
@@ -304,6 +326,14 @@
       <input type="file" id="pdf" accept="application/pdf" />
       <button id="submit">Submit</button>
     </div>
+    <details class="example-details">
+      <summary>Try-me example: <b>MAE</b> (arXiv 2111.06377)</summary>
+      <div class="example-body">
+        PaperLens was trained on anonymized inputs, so drop in a paper PDF whose authors / affiliations are blinded. To grab MAE for a quick try:
+        <pre>curl -L https://arxiv.org/pdf/2111.06377 -o mae.pdf</pre>
+        Note this is the de-anonymized arXiv copy — it'll still score, but you'll get a calibrated number by passing an anonymized PDF (or use the <b>LaTeX source</b> / <b>arXiv link</b> tabs, which run paperprep's anonymization first).
+      </div>
+    </details>
   </div>
 
   <div class="mode-pane" id="mode-latex">
@@ -342,6 +372,17 @@
       <div style="margin-top:14px"><button id="submit-latex">Submit</button></div>
     </div>
     <div class="meta" id="latex-meta"></div>
+    <details class="example-details">
+      <summary>Try-me example: <b>MAE</b> (arXiv 2111.06377)</summary>
+      <div class="example-body">
+        Fetch the LaTeX source bundle from arXiv and extract it, then point Browse at the resulting dir:
+        <pre>mkdir -p ~/mae_src
+curl -L https://arxiv.org/src/2111.06377 | tar xz -C ~/mae_src</pre>
+        Click <b>Browse…</b> above, navigate to <code>~/mae_src</code>, and hit <b>✓ Use this folder</b>. paperprep anonymizes the source (authors → Anonymous, strips URLs/ack/thanks) before compile + score.
+        <br><br>
+        If the dir is a <b>git repo</b>, an extra <b>History</b> option appears — score across commits to see how p_accept evolved over your paper's lifetime.
+      </div>
+    </details>
   </div>
 
   <div class="mode-pane" id="mode-arxiv">
@@ -355,6 +396,16 @@
     </div>
     <p class="git-note">The server downloads <code>https://arxiv.org/src/&lt;id&gt;</code>, extracts it, and runs the LaTeX-dir pipeline. Append <code>v2</code>/<code>v3</code> for a specific version; bare id = latest.</p>
     <div class="meta" id="arxiv-meta"></div>
+    <details class="example-details">
+      <summary>Try-me example: <b>MAE</b> (arXiv 2111.06377)</summary>
+      <div class="example-body">
+        Paste any of these into the box above and hit Submit:
+        <pre>2111.06377
+2111.06377v3
+https://arxiv.org/abs/2111.06377</pre>
+        The server fetches <code>https://arxiv.org/src/2111.06377</code>, untars it, runs paperprep anonymization + compile, then scores. The 4-stage bar (download → latex_extraction → paperprep → paperlens_score) tracks progress.
+      </div>
+    </details>
   </div>
 
   <div class="meta" id="meta"></div>
