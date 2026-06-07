@@ -222,7 +222,19 @@
     margin-top: 10px; border: 1px solid var(--card-bd); border-radius: 6px;
     background: #fff; padding: 10px; max-height: 340px; overflow: auto;
   }
-  .db-cur { font-family: ui-monospace, monospace; font-size: 12px; color: var(--fg); margin-bottom: 8px; word-break: break-all; }
+  .db-cur {
+    font-family: ui-monospace, monospace; font-size: 12px; color: var(--fg);
+    margin-bottom: 6px; padding: 6px 8px; width: 100%;
+    border: 1px solid var(--card-bd); border-radius: 4px; background: #fff;
+  }
+  .db-cur:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .db-bookmarks { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+  .db-bookmark {
+    font-size: 11px; padding: 3px 8px; cursor: pointer;
+    border: 1px solid var(--card-bd); border-radius: 12px;
+    background: var(--code-bg); color: var(--muted);
+  }
+  .db-bookmark:hover { color: var(--accent); border-color: var(--accent); }
   .db-actions { display: flex; gap: 8px; margin-bottom: 10px; }
   .db-actions button { font-size: 12px; padding: 5px 10px; }
   .db-up, .db-cancel { background: #fff; color: var(--fg); border: 1px solid var(--card-bd); }
@@ -775,14 +787,25 @@ async function openBrowser(path) {
         + `${x.is_git ? ' <span class="tag-git">git</span>' : ""}`
         + `${x.has_tex ? ' <span class="tag-tex">tex</span>' : ""}</div>`).join("")
     : `<div class="db-empty">(no sub-folders here)</div>`;
+  const bookmarks = (d.bookmarks || []).map((b) =>
+    `<span class="db-bookmark" data-path="${esc(b.path)}">${esc(b.label)}</span>`).join("");
   el.innerHTML = `
-    <div class="db-cur">${esc(d.path)}</div>
+    <input class="db-cur" type="text" value="${esc(d.path)}" spellcheck="false" />
+    ${bookmarks ? `<div class="db-bookmarks">${bookmarks}</div>` : ""}
     <div class="db-actions">
       <button type="button" class="db-use">✓ Use this folder</button>
       ${d.parent ? '<button type="button" class="db-up">⬆ Up</button>' : ""}
       <button type="button" class="db-cancel">Cancel</button>
     </div>
     <div class="db-list">${items}</div>`;
+  // Edit path + Enter = jump to that path
+  const cur = el.querySelector(".db-cur");
+  cur.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); openBrowser(cur.value); }
+    if (e.key === "Escape") { el.style.display = "none"; }
+  });
+  el.querySelectorAll(".db-bookmark").forEach((b) =>
+    b.addEventListener("click", () => openBrowser(b.dataset.path)));
   el.querySelectorAll(".db-item").forEach((it) =>
     it.addEventListener("click", () => openBrowser(it.dataset.path)));
   const up = el.querySelector(".db-up");

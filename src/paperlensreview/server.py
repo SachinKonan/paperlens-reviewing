@@ -191,19 +191,53 @@ def submit_arxiv(req: SubmitArxivReq) -> dict:
             "arxiv_id": aid, "mode": "arxiv"}
 
 
+def _default_browse_path() -> Path:
+    """Best initial folder for the dir browser. Mirrors the setup wizard's
+    ``form._default_parent``: writable per-user scratch -> /scratch/gpfs -> $HOME.
+    """
+    import getpass
+    import glob
+    user = os.environ.get("USER") or getpass.getuser()
+    for p in sorted(glob.glob(f"/scratch/gpfs/*/{user}")):
+        if Path(p).is_dir():
+            return Path(p)
+    if Path("/scratch/gpfs").is_dir():
+        return Path("/scratch/gpfs")
+    return Path.home()
+
+
+def _browse_bookmarks() -> list[dict]:
+    """Quick-jump shortcuts shown above the dir list. Only entries that exist
+    on this host are surfaced -- the dialog gracefully degrades on machines
+    without /scratch/gpfs (laptops, CI runners)."""
+    out = []
+    sgu = _default_browse_path()
+    if sgu != Path.home() and sgu != Path("/scratch/gpfs"):
+        out.append({"label": "scratch (you)", "path": str(sgu)})
+    if Path("/scratch/gpfs").is_dir():
+        out.append({"label": "/scratch/gpfs", "path": "/scratch/gpfs"})
+    out.append({"label": "home", "path": str(Path.home())})
+    out.append({"label": "/", "path": "/"})
+    return out
+
+
 @app.post("/list_dirs")
 def list_dirs(req: ListDirsReq) -> dict:
-    """Server-side folder browser: list immediate sub-directories of ``path``
-    (default: the server user's home).
+    """Server-side folder browser: list immediate sub-directories of ``path``.
+
+    Default initial path is the writable per-user scratch dir if present
+    (e.g. ``/scratch/gpfs/<group>/<user>``), else ``/scratch/gpfs``, else
+    the server user's home -- same logic as the setup wizard's parent-dir
+    default so the browser opens where your repos actually live.
 
     The LaTeX source lives on the *server* filesystem -- paperprep compiles it
     and ``git archive`` reads its history there -- so the UI browses the server
     rather than a browser folder-picker (which can't expose an absolute path).
     Read-only: lists directories, never file contents.
     """
-    start = Path(req.path).expanduser() if req.path else Path.home()
+    start = Path(req.path).expanduser() if req.path else _default_browse_path()
     if not start.exists() or not start.is_dir():
-        start = Path.home()
+        start = _default_browse_path()
     start = start.resolve()
     try:
         entries = sorted(start.iterdir(), key=lambda p: p.name.lower())
@@ -221,7 +255,8 @@ def list_dirs(req: ListDirsReq) -> dict:
         dirs.append({"name": child.name, "path": str(child),
                      "is_git": is_git, "has_tex": has_tex})
     parent = str(start.parent) if start.parent != start else None
-    return {"path": str(start), "parent": parent, "dirs": dirs}
+    return {"path": str(start), "parent": parent, "dirs": dirs,
+            "bookmarks": _browse_bookmarks()}
 
 
 @app.post("/probe_latex")
