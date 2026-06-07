@@ -34,6 +34,12 @@ log = logging.getLogger(__name__)
 # can't show fine-grained progress for it without modifying paperprep itself.
 STAGES: list[str] = ["paperprep", "paperlens_score"]
 
+# Appended when the user opted into the post-decision agentic review on the
+# PDF / arxiv tabs (claude or codex headless). agent_setup builds the two
+# workspaces (no-prior + with-prior); agent_review streams both runs in
+# parallel through the chat popups.
+STAGES_AGENT: list[str] = ["agent_setup", "agent_review"]
+
 
 @dataclass
 class JobStatus:
@@ -53,6 +59,16 @@ class JobStatus:
     # count. _enter_stage uses this list to compute stage_index correctly.
     stages: list[str] = field(default_factory=lambda: list(STAGES))
 
+    # ----- Agentic review state (PDF + arxiv tabs only) ---------------------
+    # When the user toggles "Run agentic review", these track the two parallel
+    # subagent runs (no-prior + with-prior). Events accumulate per-variant so
+    # the UI can poll /jobs/<id>/agent_events?variant=... and render a chat
+    # transcript that streams in. ``agent_choice`` is "claude" | "codex" | None.
+    agent_choice: Optional[str] = None
+    agent_state: dict = field(default_factory=dict)   # {variant: "queued|running|done|error"}
+    agent_events: dict = field(default_factory=dict)  # {variant: list[event dict]}
+    agent_results: dict = field(default_factory=dict) # {variant: {predictions, error?, workspace, elapsed_s}}
+
     def to_dict(self) -> dict:
         return {
             "job_id": self.job_id,
@@ -66,6 +82,14 @@ class JobStatus:
             "result": self.result,
             "stage_log": list(self.stage_log),
             "stages": list(self.stages),
+            "agent_choice": self.agent_choice,
+            # Don't ship full event arrays through /status -- the UI fetches
+            # them lazily from /jobs/<id>/agent_events. Just expose counts +
+            # state so the popup can show "12 events, running" without bloat.
+            "agent_state": dict(self.agent_state),
+            "agent_event_counts": {k: len(v) for k, v in self.agent_events.items()},
+            "agent_results": {k: {kk: vv for kk, vv in r.items() if kk != "predictions"}
+                              for k, r in self.agent_results.items()},
         }
 
 
@@ -243,8 +267,179 @@ def _score_from_prepare(cfg, prepare_body: dict) -> dict:
 
 
 def _write_done(status: JobStatus, job_dir: Path, result: dict) -> None:
+    """Mark the job's primary result and (when there's no agent stage) flip
+    state to "done". When an agent stage is queued we keep state="running"
+    so the UI keeps polling while the agent transcripts stream in -- the
+    result.json is still written immediately so the verdict shows up before
+    the agents finish.
+    """
     (job_dir / "result.json").write_text(json.dumps(result, indent=2))
     status.result = result
+    if status.agent_choice:
+        # Agent stage is up next; advance to it and stay running.
+        status.stage = "agent_setup"
+        try:
+            status.stage_index = status.stages.index("agent_setup")
+        except ValueError:
+            status.stage_index = len(STAGES)
+    else:
+        status.state = "done"
+        status.stage = "done"
+        status.stage_index = status.total_stages
+
+
+# ---------------------------------------------------------------------------
+# Agent stage (post-decision, optional)
+# ---------------------------------------------------------------------------
+
+_AGENT_VARIANTS = ("no_prior", "with_prior")
+
+
+def _agent_text_md(prepare_body: dict) -> Optional[Path]:
+    """Find paperprep's normalized text.md for this paper. We look under the
+    same output_dir tree the panel builder pulls page_images from."""
+    pp = prepare_body.get("output_dir")
+    if not pp:
+        return None
+    for cand in Path(pp).rglob("text.md"):
+        return cand
+    for cand in Path(pp).rglob("*.md"):
+        return cand
+    return None
+
+
+def _run_agent_stage(status: JobStatus, job_dir: Path, *, result: dict,
+                     prepare_body: dict) -> None:
+    """Build two workspaces (no-prior + with-prior) and run the chosen agent
+    in each concurrently. Streams normalized events into ``status.agent_events``;
+    the UI polls /jobs/<id>/agent_events?variant=... to render them as chat.
+    """
+    from . import agents as _agents
+
+    agent = status.agent_choice or ""
+    job_id = status.job_id
+    pp_dir = Path(prepare_body.get("output_dir") or job_dir)
+    panel = result.get("panel_path")
+    panel_path = Path(panel) if panel else None
+    text_md = _agent_text_md(prepare_body)
+    sid = result.get("arxiv_id") or job_id
+    decision = result.get("decision", "Accept")
+    p_accept = float(result.get("p_accept", 0.5))
+    title = result.get("title") or result.get("pdf_name") or sid
+    modality = str(result.get("modality", "vision"))
+    domain = str(result.get("domain", ""))
+
+    # Compute the calibrated PaperLens prior ONCE -- both variants share the
+    # same Platt-scaled bundle (with_prior shows it; no_prior ignores it).
+    # The score row in `result` carries the raw 2-token logprobs which is the
+    # cleanest input for Platt (logit difference = z directly).
+    cal = _agents.calibrate_prior(
+        logp_accept=result.get("logp_accept"),
+        logp_reject=result.get("logp_reject"),
+        p_accept_raw=p_accept,
+        domain=domain,
+        modality=modality,
+    )
+    log.info("[%s] calibrated prior: domain=%s modality=%s -> %s",
+             job_id, domain, modality, {k: cal.get(k) for k in
+             ("p_accept_raw", "p_accept_cal", "confidence", "decision", "has_calibration")})
+
+    # Stage 1: agent_setup -- build both workspaces.
+    _enter_stage(status, "agent_setup", via="agent")
+    manifests: dict[str, dict] = {}
+    setup_root = job_dir / "agents" / agent
+    for variant in _AGENT_VARIANTS:
+        ws = setup_root / variant
+        manifests[variant] = _agents.build_workspace(
+            dest=ws,
+            paperprep_output_dir=pp_dir,
+            submission_id=str(sid),
+            modality=modality,
+            panel_path=panel_path,
+            text_md_path=text_md,
+            paper_title=str(title),
+            with_prior=(variant == "with_prior"),
+            prior_decision=decision,
+            prior_p_accept=p_accept,
+            prior_calibration=cal,
+            domain=domain,
+            agent=agent,
+        )
+        status.agent_state[variant] = "queued"
+        status.agent_events[variant] = []
+    # Surface the calibration bundle on result.json so the UI's verdict card
+    # can show "raw 0.881 / calibrated 0.811 / confidence 0.811" alongside
+    # the agent transcripts.
+    if status.result is not None:
+        status.result["paperlens_prior"] = cal
+    log.info("[%s] agent workspaces built -> %s/{no_prior,with_prior}", job_id, setup_root)
+
+    # Stage 2: agent_review -- spawn both runs in their own threads.
+    _enter_stage(status, "agent_review", via="agent")
+
+    def _append(variant: str, ev_kind_payload: dict) -> None:
+        bucket = status.agent_events.setdefault(variant, [])
+        bucket.append({
+            "seq": len(bucket),
+            "ts": time.time(),
+            "kind": ev_kind_payload.get("kind", "status"),
+            "payload": ev_kind_payload.get("payload", {}),
+        })
+
+    threads: list[threading.Thread] = []
+    runner_lock = threading.Lock()
+    runners_done: dict[str, _agents.AgentResult] = {}
+
+    def _runner(variant: str, manifest: dict) -> None:
+        status.agent_state[variant] = "running"
+        try:
+            res = _agents.run_agent_headless(
+                agent=agent,
+                workspace=Path(manifest["workspace"]),
+                prompt=manifest["prompt"],
+                submission_id=str(sid),
+                on_event=lambda ev: _append(variant, ev),
+            )
+        except Exception as e:
+            log.exception("[%s] agent %s/%s crashed", job_id, agent, variant)
+            _append(variant, {"kind": "error", "payload": {"msg": f"runner crashed: {e}"}})
+            status.agent_state[variant] = "error"
+            with runner_lock:
+                runners_done[variant] = _agents.AgentResult(
+                    ok=False, exit_code=-1, final_text="", error=str(e),
+                    workspace=manifest["workspace"])
+            return
+        status.agent_state[variant] = "done" if res.ok else "error"
+        with runner_lock:
+            runners_done[variant] = res
+
+    for variant in _AGENT_VARIANTS:
+        t = threading.Thread(target=_runner, args=(variant, manifests[variant]),
+                             daemon=True, name=f"agent-{agent}-{variant}-{job_id[:6]}")
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join()
+
+    # Surface predictions + workspace paths on status.result so the UI's
+    # final card can show "agent decision vs paperlens decision".
+    agent_summary: dict = {}
+    for variant in _AGENT_VARIANTS:
+        r = runners_done.get(variant)
+        agent_summary[variant] = {
+            "workspace": (r.workspace if r else None),
+            "predictions": (r.predictions if r else None),
+            "ok": bool(r and r.ok),
+            "error": (r.error if r else "no result"),
+            "exit_code": (r.exit_code if r else -1),
+        }
+        status.agent_results[variant] = agent_summary[variant]
+
+    if status.result is not None:
+        status.result["agent"] = {"choice": agent, **agent_summary}
+        (job_dir / "result.json").write_text(json.dumps(status.result, indent=2))
+
+    # Final: agents done, mark the job complete.
     status.state = "done"
     status.stage = "done"
     status.stage_index = status.total_stages
@@ -280,6 +475,8 @@ def run_job(cfg, status: JobStatus, work_dir: Path, pdf_bytes: bytes, pdf_name: 
         }
         _write_done(status, job_dir, result)
         log.info(f"[{job_id}] result: {result['decision']} (p_accept={result['p_accept']:.4f})")
+        if status.agent_choice:
+            _run_agent_stage(status, job_dir, result=result, prepare_body=prepare_body)
     except Exception as e:
         log.exception(f"[{job_id}] pipeline failed")
         status.state = "error"
@@ -318,6 +515,8 @@ def run_latex_job(cfg, status: JobStatus, work_dir: Path, src_path: Path,
         }
         _write_done(status, job_dir, result)
         log.info(f"[{job_id}] result: {result['decision']} (p_accept={result['p_accept']:.4f})")
+        if status.agent_choice:
+            _run_agent_stage(status, job_dir, result=result, prepare_body=prepare_body)
     except Exception as e:
         log.exception(f"[{job_id}] latex pipeline failed")
         status.state = "error"

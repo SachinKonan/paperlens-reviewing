@@ -333,6 +333,52 @@
 
   /* ----- lock the input card while a job runs ----- */
   .card.locked { pointer-events: none; opacity: 0.55; }
+
+  /* ----- agentic review toggle (PDF + arxiv tabs) ----- */
+  .agent-toggle { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--card-bd);
+                  display: flex; align-items: center; gap: 14px; font-size: 13px; }
+  .agent-toggle .label { font-weight: 600; color: var(--fg); }
+  .agent-toggle .opt { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  .agent-toggle .opt.disabled { color: var(--muted); cursor: not-allowed; }
+  .agent-toggle .probe-info { font-size: 11px; color: var(--muted); }
+
+  /* ----- two-panel chat transcript for agent_review stage ----- */
+  .agent-chats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
+  .agent-chat-card { border: 1px solid var(--card-bd); border-radius: 6px; background: #fafafa;
+                     display: flex; flex-direction: column; max-height: 540px; }
+  .agent-chat-head { padding: 8px 12px; border-bottom: 1px solid var(--card-bd);
+                     display: flex; justify-content: space-between; align-items: center;
+                     font-size: 12px; background: #fff; }
+  .agent-chat-title { font-weight: 600; }
+  .agent-chat-state { font-size: 11px; padding: 2px 8px; border-radius: 10px;
+                      background: var(--hover-bg); color: var(--muted); }
+  .agent-chat-state.running { background: #fff3cd; color: #856404; }
+  .agent-chat-state.done    { background: #d4edda; color: #155724; }
+  .agent-chat-state.error   { background: #f8d7da; color: #721c24; }
+  .agent-chat-body { flex: 1; overflow-y: auto; padding: 10px 12px;
+                     font-size: 12px; line-height: 1.45; }
+  .agent-msg { margin-bottom: 10px; }
+  .agent-msg.assistant { padding-left: 0; }
+  .agent-msg .role { font-weight: 600; color: var(--accent); font-size: 11px;
+                     text-transform: uppercase; letter-spacing: 0.4px; }
+  .agent-msg pre { white-space: pre-wrap; font-family: inherit; margin: 4px 0; }
+  .agent-tool { border-left: 3px solid var(--accent); background: #fff;
+                padding: 6px 8px; margin: 6px 0; border-radius: 0 4px 4px 0; }
+  .agent-tool .tool-name { font-weight: 600; font-size: 11px; color: var(--accent);
+                           font-family: monospace; }
+  .agent-tool .tool-args { font-family: monospace; font-size: 11px; color: var(--muted);
+                           white-space: pre-wrap; word-break: break-all; max-height: 120px;
+                           overflow-y: auto; margin-top: 3px; }
+  .agent-tool .tool-result { font-family: monospace; font-size: 11px; color: #444;
+                             background: var(--hover-bg); padding: 4px 6px; margin-top: 4px;
+                             border-radius: 3px; max-height: 160px; overflow-y: auto;
+                             white-space: pre-wrap; }
+  .agent-tool .tool-result.error { color: #721c24; background: #f8d7da; }
+  .agent-status { font-size: 11px; color: var(--muted); font-style: italic; margin: 4px 0; }
+  .agent-final { margin-top: 8px; padding: 8px 12px; background: #e7f3ff; border-radius: 4px;
+                 font-size: 12px; border-left: 3px solid var(--accent); }
+  .agent-final .key { font-weight: 600; }
+  .agent-final.fail { background: #f8d7da; border-left-color: #c82333; }
 </style>
 </head>
 <body>
@@ -352,6 +398,13 @@
     <div class="upload">
       <input type="file" id="pdf" accept="application/pdf" />
       <button id="submit">Submit</button>
+    </div>
+    <div class="agent-toggle" data-tab="pdf">
+      <span class="label">Run agentic review after decision:</span>
+      <label class="opt"><input type="radio" name="agent-pdf" value="" checked> Off</label>
+      <label class="opt"><input type="radio" name="agent-pdf" value="claude"> Claude Code</label>
+      <label class="opt"><input type="radio" name="agent-pdf" value="codex"> Codex</label>
+      <span class="probe-info" data-probe="pdf"></span>
     </div>
     <details class="example-details">
       <summary>Try-me example: <b>MAE</b> (arXiv 2111.06377)</summary>
@@ -427,6 +480,13 @@ curl -L https://arxiv.org/src/2111.06377 | tar xz -C ~/mae_src</pre>
       <input type="text" id="arxiv-main-tex" placeholder="auto-detect (e.g. main.tex)" />
     </div>
     <p class="git-note">The server downloads <code>https://arxiv.org/src/&lt;id&gt;</code>, extracts it, and runs the LaTeX-dir pipeline. Append <code>v2</code>/<code>v3</code> for a specific version; bare id = latest.</p>
+    <div class="agent-toggle" data-tab="arxiv">
+      <span class="label">Run agentic review after decision:</span>
+      <label class="opt"><input type="radio" name="agent-arxiv" value="" checked> Off</label>
+      <label class="opt"><input type="radio" name="agent-arxiv" value="claude"> Claude Code</label>
+      <label class="opt"><input type="radio" name="agent-arxiv" value="codex"> Codex</label>
+      <span class="probe-info" data-probe="arxiv"></span>
+    </div>
     <div class="meta" id="arxiv-meta"></div>
     <details class="example-details">
       <summary>Try-me example: <b>MAE</b> (arXiv 2111.06377)</summary>
@@ -468,6 +528,8 @@ const STAGE_LABELS = {
   normalize: "Normalize",
   filter: "Filter",
   export: "Export ShareGPT",
+  agent_setup: "Agent workspace setup",
+  agent_review: "Agentic review (streaming)",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -1031,6 +1093,188 @@ document.querySelectorAll(".mode-btn").forEach((btn) => {
   });
 });
 
+/* ---------------- Agentic-review toggle + streaming ---------------- */
+
+let AGENT_PROBE = null;             // {claude:{available,...}, codex:{...}}
+const AGENT_VARIANTS = ["no_prior", "with_prior"];
+
+// Track per-(job,variant) polling so a tab switch / re-render doesn't
+// double-start the event loop. Keyed by `${jobId}__${variant}`.
+const _agentPolls = new Map();
+
+async function refreshAgentProbe() {
+  try {
+    const r = await fetch("/health");
+    if (!r.ok) return;
+    const h = await r.json();
+    AGENT_PROBE = h.agents || {};
+  } catch (e) { /* health is optional; toggle stays Off */ }
+  ["pdf", "arxiv"].forEach(applyAgentProbe);
+}
+function applyAgentProbe(tab) {
+  const probeEl = document.querySelector(`.probe-info[data-probe="${tab}"]`);
+  if (!probeEl) return;
+  const opts = document.querySelectorAll(`input[name="agent-${tab}"]`);
+  if (!AGENT_PROBE) { probeEl.textContent = "probing CLIs…"; return; }
+  const bits = [];
+  opts.forEach((inp) => {
+    const v = inp.value;
+    if (!v) return;
+    const info = AGENT_PROBE[v] || {};
+    const lab = inp.parentElement;
+    if (info.available) {
+      lab.classList.remove("disabled"); inp.disabled = false;
+      bits.push(`${v}=${(info.version || "ok").split(" ")[0]}`);
+    } else {
+      lab.classList.add("disabled"); inp.disabled = true; inp.checked = false;
+      bits.push(`${v}=not installed`);
+    }
+  });
+  // Ensure "Off" is selected if both are disabled or nothing else picked.
+  const checked = document.querySelector(`input[name="agent-${tab}"]:checked`);
+  if (!checked) {
+    const off = document.querySelector(`input[name="agent-${tab}"][value=""]`);
+    if (off) off.checked = true;
+  }
+  probeEl.textContent = bits.length ? bits.join("  ·  ") : "";
+}
+function selectedAgent(tab) {
+  const r = document.querySelector(`input[name="agent-${tab}"]:checked`);
+  return r && r.value ? r.value : null;
+}
+
+function _ensureAgentChats(mode, agent) {
+  const box = resultBox(mode);
+  if (!box) return null;
+  let chats = box.querySelector(".agent-chats");
+  if (chats) return chats;
+  // Find an anchor to insert before -- prefer the existing verdict card,
+  // otherwise just append.
+  chats = document.createElement("div");
+  chats.className = "agent-chats";
+  chats.innerHTML = `
+    <div class="agent-chat-card" data-variant="no_prior">
+      <div class="agent-chat-head">
+        <span class="agent-chat-title">${esc(agent)} · <b>no prior</b></span>
+        <span class="agent-chat-state" data-state>queued</span>
+      </div>
+      <div class="agent-chat-body" data-body></div>
+    </div>
+    <div class="agent-chat-card" data-variant="with_prior">
+      <div class="agent-chat-head">
+        <span class="agent-chat-title">${esc(agent)} · <b>with PaperLens prior</b></span>
+        <span class="agent-chat-state" data-state>queued</span>
+      </div>
+      <div class="agent-chat-body" data-body></div>
+    </div>`;
+  box.appendChild(chats);
+  return chats;
+}
+
+function _renderAgentEvent(bodyEl, ev) {
+  const div = document.createElement("div");
+  if (ev.kind === "text") {
+    const role = (ev.payload && ev.payload.role) || "assistant";
+    div.className = `agent-msg ${esc(role)}`;
+    div.innerHTML = `<div class="role">${esc(role)}</div><pre>${esc(ev.payload.text || "")}</pre>`;
+  } else if (ev.kind === "tool_call") {
+    const name = (ev.payload && ev.payload.name) || "tool";
+    const inp = ev.payload && ev.payload.input;
+    div.className = "agent-tool";
+    div.dataset.toolId = (ev.payload && ev.payload.id) || "";
+    div.innerHTML = `
+      <div class="tool-name">→ ${esc(name)}</div>
+      <div class="tool-args">${esc(JSON.stringify(inp || {}, null, 2))}</div>`;
+  } else if (ev.kind === "tool_result") {
+    // Attach to the matching tool_call card if we can find it; otherwise append.
+    const id = (ev.payload && ev.payload.tool_use_id) || "";
+    let card = id && bodyEl.querySelector(`.agent-tool[data-tool-id="${CSS.escape(id)}"]`);
+    if (!card) {
+      const candidates = bodyEl.querySelectorAll(".agent-tool");
+      card = candidates.length ? candidates[candidates.length - 1] : null;
+    }
+    const resCls = (ev.payload && ev.payload.exit_code && ev.payload.exit_code !== 0) ? "error" : "";
+    const content = (ev.payload && ev.payload.content) || "";
+    const block = document.createElement("div");
+    block.className = `tool-result ${resCls}`;
+    block.textContent = content;
+    if (card) { card.appendChild(block); }
+    else {
+      div.className = "agent-tool";
+      div.appendChild(block);
+      bodyEl.appendChild(div);
+    }
+    return;
+  } else if (ev.kind === "status") {
+    div.className = "agent-status";
+    const p = ev.payload || {};
+    const txt = p.msg || p.model || p.thread_id || JSON.stringify(p);
+    div.textContent = `· ${txt}`;
+  } else if (ev.kind === "error") {
+    div.className = "agent-final fail";
+    div.innerHTML = `<span class="key">error:</span> ${esc(ev.payload.msg || "")}`;
+  } else if (ev.kind === "done") {
+    const p = ev.payload || {};
+    const preds = p.predictions;
+    const decision = preds && preds.decision;
+    const rating = preds && preds.rating;
+    const cls = (preds && decision) ? "" : "fail";
+    div.className = `agent-final ${cls}`;
+    if (preds) {
+      div.innerHTML = `
+        <span class="key">agent decision:</span> ${esc(decision || "?")}
+        &nbsp;·&nbsp;rating ${esc(String(rating ?? "?"))}
+        &nbsp;·&nbsp;${esc(((p.elapsed_s || 0)).toFixed ? (p.elapsed_s).toFixed(1) : p.elapsed_s)}s`;
+    } else {
+      div.innerHTML = `<span class="key">done</span> (no predictions.json — schema fail?)`;
+    }
+  } else {
+    div.className = "agent-status";
+    div.textContent = `· ${ev.kind}`;
+  }
+  bodyEl.appendChild(div);
+  bodyEl.scrollTop = bodyEl.scrollHeight;
+}
+
+async function _pollAgentVariant(jobId, mode, agent, variant) {
+  const key = `${jobId}__${variant}`;
+  if (_agentPolls.get(key)) return;        // already running
+  _agentPolls.set(key, true);
+  let since = 0;
+  let lastState = null;
+  // Loop until the variant reaches a terminal state AND we've drained events.
+  while (true) {
+    try {
+      const r = await fetch(`/jobs/${jobId}/agent_events?variant=${variant}&since=${since}&limit=200`);
+      if (!r.ok) { await new Promise(rs => setTimeout(rs, 2000)); continue; }
+      const data = await r.json();
+      const chats = _ensureAgentChats(mode, agent);
+      if (!chats) break;
+      const card = chats.querySelector(`.agent-chat-card[data-variant="${variant}"]`);
+      const stateEl = card && card.querySelector("[data-state]");
+      const bodyEl = card && card.querySelector("[data-body]");
+      if (stateEl && data.state !== lastState) {
+        stateEl.textContent = data.state;
+        stateEl.className = `agent-chat-state ${data.state}`;
+        lastState = data.state;
+      }
+      (data.events || []).forEach((ev) => _renderAgentEvent(bodyEl, ev));
+      since = data.next_since;
+      if (data.state === "done" || data.state === "error") {
+        if (since >= data.total) break;    // drained
+      }
+    } catch (e) { /* fall through to sleep */ }
+    await new Promise(rs => setTimeout(rs, 1500));
+  }
+  _agentPolls.delete(key);
+}
+
+function startAgentStreaming(jobId, mode, agent) {
+  // Spin up both variant polls concurrently; each writes into its own card.
+  _ensureAgentChats(mode, agent);
+  AGENT_VARIANTS.forEach((v) => _pollAgentVariant(jobId, mode, agent, v));
+}
+
 /* ---------------- PDF submit ---------------- */
 
 $("submit").addEventListener("click", async () => {
@@ -1042,10 +1286,13 @@ $("submit").addEventListener("click", async () => {
   try {
     const body = new FormData();
     body.append("file", f);
+    const agent = selectedAgent("pdf");
+    if (agent) body.append("agent", agent);
     const r = await fetch("/submit", { method: "POST", body });
     if (!r.ok) { renderError(`submit failed: ${r.status} ${await r.text()}`, "pdf"); return; }
     const resp = await r.json();
-    meta.textContent = `submitted job ${resp.job_id}`;
+    meta.textContent = `submitted job ${resp.job_id}${resp.agent ? " + " + resp.agent : ""}`;
+    if (resp.agent) startAgentStreaming(resp.job_id, "pdf", resp.agent);
     await afterSubmit(resp, "pdf");
   } finally {
     $("submit").disabled = false;
@@ -1300,19 +1547,25 @@ $("submit-arxiv").addEventListener("click", async () => {
   am.textContent = `fetching ${aid} …`;
   beginJob(false, "arxiv");
   try {
+    const agent = selectedAgent("arxiv");
     const r = await fetch("/submit_arxiv", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ arxiv_id: aid, main_tex: mainTex || null }),
+      body: JSON.stringify({ arxiv_id: aid, main_tex: mainTex || null, agent }),
     });
     if (!r.ok) { renderError(`submit failed: ${r.status} ${await r.text()}`, "arxiv"); return; }
     const resp = await r.json();
-    am.textContent = `submitted job ${resp.job_id} (arxiv ${resp.arxiv_id})`;
+    am.textContent = `submitted job ${resp.job_id} (arxiv ${resp.arxiv_id})${resp.agent ? " + " + resp.agent : ""}`;
+    if (resp.agent) startAgentStreaming(resp.job_id, "arxiv", resp.agent);
     await afterSubmit(resp, "arxiv");
   } finally {
     $("submit-arxiv").disabled = false;
     setBusy(false);
   }
 });
+
+// Probe agent CLIs once at page load so the radios reflect ground truth on
+// the server (they're disabled if `claude --version` / `codex --version` failed).
+refreshAgentProbe();
 </script>
 </body>
 </html>

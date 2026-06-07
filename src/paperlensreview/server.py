@@ -27,8 +27,9 @@ from pydantic import BaseModel
 from .checks import check_url_health
 from . import arxiv as _arxiv
 from . import latexsrc
+from . import agents as _agents_mod
 from .pipeline import (
-    JobRegistry, JobStatus, STAGES,
+    JobRegistry, JobStatus, STAGES, STAGES_AGENT,
     run_job, run_latex_job, run_latex_history_job,
     _enter_stage,
 )
@@ -37,6 +38,30 @@ from .pipeline import (
 # /submit_arxiv prepends two stages to the standard pipeline so the UI's
 # stage bar shows fetch + extract before paperprep+score.
 STAGES_ARXIV = ["download", "latex_extraction"] + STAGES
+
+
+def _stages_with_agent(base: list[str], agent: Optional[str]) -> list[str]:
+    """Append the two agent stages when the user opted in. Mirrors what
+    _run_agent_stage emits in the pipeline so the UI's stage bar lines up."""
+    return list(base) + (list(STAGES_AGENT) if agent else [])
+
+
+def _normalize_agent(choice: Optional[str]) -> Optional[str]:
+    """Validate the user's agent toggle against probe results. Returns the
+    canonical name (``"claude"`` / ``"codex"``) or None if the toggle was off
+    or the requested agent isn't installed (we soft-ignore rather than 400 --
+    the UI's checkbox already gated on the probe; an inconsistency here means
+    the toggle raced the install state)."""
+    if not choice:
+        return None
+    choice = choice.lower().strip()
+    if choice not in ("claude", "codex"):
+        return None
+    probe = _agents_mod.probe_agents()
+    if not probe.get(choice, {}).get("available"):
+        log.warning("agent %r requested but probe says unavailable: %r", choice, probe.get(choice))
+        return None
+    return choice
 
 
 log = logging.getLogger(__name__)
@@ -92,13 +117,22 @@ def health() -> dict:
         "paperprep_serve": {"url": cfg.paperprep_serve.base_url, "healthy": pp.ok, "detail": pp.detail},
         "n_jobs": len(_state["jobs"].all()),
         "stages": STAGES,
+        # Agent availability is probed lazily (cached process-lifetime). The UI
+        # uses this to enable/disable the claude+codex radios on PDF + arxiv
+        # tabs; the agent stages are entirely opt-in.
+        "agents": _agents_mod.probe_agents(),
     }
 
 
 @app.post("/submit")
-def submit(file: UploadFile = File(...)) -> dict:
+def submit(file: UploadFile = File(...),
+           agent: Optional[str] = None) -> dict:
     """Accept a PDF upload, kick off the pipeline in a background thread,
     return the job_id immediately. The UI then polls /status/{job_id}.
+
+    ``agent`` ("claude" | "codex" | None) opts into the post-decision agentic
+    review. The two extra stages are appended to STAGES on the response so the
+    UI's progress bar shows them from the start.
     """
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "only .pdf uploads are supported")
@@ -110,7 +144,13 @@ def submit(file: UploadFile = File(...)) -> dict:
 
     job_id = uuid.uuid4().hex[:12]
     status = _state["jobs"].create(job_id)
-    log.info("[/submit] job=%s file=%r size=%d", job_id, file.filename, len(pdf_bytes))
+    agent_choice = _normalize_agent(agent)
+    status.agent_choice = agent_choice
+    stages = _stages_with_agent(STAGES, agent_choice)
+    status.stages = list(stages)
+    status.total_stages = len(stages)
+    log.info("[/submit] job=%s file=%r size=%d agent=%s",
+             job_id, file.filename, len(pdf_bytes), agent_choice)
 
     def _runner():
         # One pipeline at a time per worker process (MinerU + paperlens are
@@ -120,7 +160,8 @@ def submit(file: UploadFile = File(...)) -> dict:
 
     t = threading.Thread(target=_runner, daemon=True, name=f"job-{job_id}")
     t.start()
-    return {"job_id": job_id, "stages": STAGES, "submitted_at": status.started_at}
+    return {"job_id": job_id, "stages": stages, "submitted_at": status.started_at,
+            "agent": agent_choice}
 
 
 # --------- LaTeX-source input (local dir, optional git history) ---------
@@ -144,6 +185,7 @@ class ListDirsReq(BaseModel):
 class SubmitArxivReq(BaseModel):
     arxiv_id: str                        # bare id (2305.00838) or any arxiv.org URL
     main_tex: Optional[str] = None       # optional entrypoint hint; auto-detected if omitted
+    agent: Optional[str] = None          # "claude" | "codex" | None (off)
 
 
 @app.post("/submit_arxiv")
@@ -161,14 +203,19 @@ def submit_arxiv(req: SubmitArxivReq) -> dict:
 
     job_id = uuid.uuid4().hex[:12]
     status = _state["jobs"].create(job_id)
-    log.info("[/submit_arxiv] job=%s arxiv_id=%s main_tex=%s", job_id, aid, req.main_tex)
+    agent_choice = _normalize_agent(req.agent)
+    status.agent_choice = agent_choice
+    log.info("[/submit_arxiv] job=%s arxiv_id=%s main_tex=%s agent=%s",
+             job_id, aid, req.main_tex, agent_choice)
 
     # Pre-set the stage list so the UI's stage bar shows 4 boxes
     # (download -> latex_extraction -> paperprep -> paperlens_score) instead of 2.
     # _enter_stage uses status.stages to compute stage_index, so the indices
     # land correctly even though run_latex_job emits the trailing 2 stages.
-    status.stages = list(STAGES_ARXIV)
-    status.total_stages = len(STAGES_ARXIV)
+    # When agent=claude|codex, the 2 trailing agent stages are appended too.
+    arxiv_stages = _stages_with_agent(STAGES_ARXIV, agent_choice)
+    status.stages = list(arxiv_stages)
+    status.total_stages = len(arxiv_stages)
 
     def _runner():
         with _state["job_lock"]:
@@ -201,8 +248,8 @@ def submit_arxiv(req: SubmitArxivReq) -> dict:
 
     t = threading.Thread(target=_runner, daemon=True, name=f"job-{job_id}")
     t.start()
-    return {"job_id": job_id, "stages": STAGES_ARXIV, "submitted_at": status.started_at,
-            "arxiv_id": aid, "mode": "arxiv"}
+    return {"job_id": job_id, "stages": arxiv_stages, "submitted_at": status.started_at,
+            "arxiv_id": aid, "mode": "arxiv", "agent": agent_choice}
 
 
 def _default_browse_path() -> Path:
@@ -454,6 +501,39 @@ def _list_tree(root: _Path) -> dict:
 def job_tree(job_id: str, commit: Optional[str] = None) -> dict:
     return {label: _list_tree(root)
             for label, root in _job_roots(job_id, commit=commit).items()}
+
+
+@app.get("/jobs/{job_id}/agent_events")
+def job_agent_events(job_id: str,
+                     variant: str,
+                     since: int = 0,
+                     limit: int = 500) -> dict:
+    """Return the next ``limit`` events from this job's agent transcript,
+    starting at sequence ``since``. ``variant`` is ``"no_prior"`` or
+    ``"with_prior"``. The UI's chat popup polls this on the same 1.5s tick
+    as /status, advancing ``since`` to ``next_since`` each turn.
+    """
+    j = _state["jobs"].get(job_id)
+    if not j:
+        raise HTTPException(404, f"unknown job_id: {job_id!r}")
+    if variant not in ("no_prior", "with_prior"):
+        raise HTTPException(400, f"variant must be no_prior|with_prior, got {variant!r}")
+    bucket = j.agent_events.get(variant, [])
+    total = len(bucket)
+    since = max(0, int(since))
+    end = min(total, since + max(1, int(limit)))
+    slice_ = bucket[since:end]
+    return {
+        "job_id": job_id,
+        "variant": variant,
+        "agent": j.agent_choice,
+        "state": j.agent_state.get(variant, "queued"),
+        "since": since,
+        "next_since": end,
+        "total": total,
+        "events": slice_,
+        "result": j.agent_results.get(variant),
+    }
 
 
 @app.get("/jobs/{job_id}/file")
