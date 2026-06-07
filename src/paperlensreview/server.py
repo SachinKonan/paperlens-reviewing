@@ -19,7 +19,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from omegaconf import OmegaConf
 from pydantic import BaseModel
@@ -126,13 +126,15 @@ def health() -> dict:
 
 @app.post("/submit")
 def submit(file: UploadFile = File(...),
-           agent: Optional[str] = None) -> dict:
+           agent: Optional[str] = Form(None)) -> dict:
     """Accept a PDF upload, kick off the pipeline in a background thread,
     return the job_id immediately. The UI then polls /status/{job_id}.
 
     ``agent`` ("claude" | "codex" | None) opts into the post-decision agentic
     review. The two extra stages are appended to STAGES on the response so the
-    UI's progress bar shows them from the start.
+    UI's progress bar shows them from the start. Form(...) is required here
+    because the UI posts multipart/form-data; without it FastAPI would treat
+    ``agent`` as a query string param and silently drop the body field.
     """
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "only .pdf uploads are supported")
