@@ -226,8 +226,26 @@
   .graph-legend { font-size: 11px; color: var(--muted); margin-top: 8px; display: flex; gap: 16px; flex-wrap: wrap; }
   .sel-count { font-weight: 600; color: var(--accent); }
 
-  /* ----- trajectory result (SVG line + EMA) ----- */
+  /* ----- trajectory result (SVG line + EMA + tile preview) ----- */
   .traj-card { padding: 18px; }
+  /* Chart on the left, panel-tile preview on the right. The right rail
+     swaps in the clicked commit's panel.png. */
+  .traj-grid {
+    display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px;
+    align-items: start; margin-top: 10px;
+  }
+  @media (max-width: 1100px) {
+    /* Below 1100px (mobile / narrow tunnels), stack: chart on top, tile below. */
+    .traj-grid { grid-template-columns: 1fr; }
+  }
+  .traj-tile-wrap {
+    border: 1px solid var(--card-bd); border-radius: 6px; padding: 10px;
+    background: #fff; max-height: 480px; overflow: auto;
+  }
+  .traj-tile-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 24px 8px; }
+  .traj-tile-head  { font-size: 11px; color: var(--muted); margin: 0 0 6px 0; line-height: 1.4; }
+  .traj-tile-head .sha { font-family: ui-monospace, monospace; color: var(--fg); font-weight: 600; }
+  .traj-tile-img { display: block; width: 100%; height: auto; border-radius: 4px; }
   .traj-chart-wrap { overflow-x: auto; padding: 6px 4px; }
   .traj-svg { display: block; min-width: 100%; }
   .traj-line       { fill: none; stroke: var(--accent); stroke-width: 2; }
@@ -447,6 +465,10 @@ const stagesEl = $("stages");
 const wrap = $("wrap");
 
 let CURRENT_MODE = "pdf";   // "pdf" | "latex" | "arxiv"
+let JOB_MODE = null;        // mode the most recently submitted job belongs to;
+                            // progress-bar visibility follows this so a stage
+                            // bar for an in-flight LaTeX job doesn't leak into
+                            // the PDF tab if you tab-switch mid-run.
 let PROBE = null;           // last /probe_latex response (holds history.commits)
 
 // Per-tab result container — each mode keeps its own result alive while
@@ -470,6 +492,13 @@ function refreshResultVisibility() {
   const wantsWide = CURRENT_MODE === "latex"
     || (active && active.dataset.wide === "1" && active.style.display !== "none");
   wrap.classList.toggle("wide", !!wantsWide);
+  // Progress bar (stage row + fill bar) follows JOB_MODE: a job submitted
+  // on the PDF tab shows its progress only on the PDF tab, not on LaTeX/arxiv.
+  // Once a job is done, the completed bar persists on its origin tab and
+  // stays hidden everywhere else.
+  if (progressBox) {
+    progressBox.style.display = (JOB_MODE !== null && CURRENT_MODE === JOB_MODE) ? "block" : "none";
+  }
 }
 
 function renderStages(currentIdx, state) {
@@ -829,23 +858,30 @@ function renderTrajectory(jobId, result, mode) {
   box.innerHTML = `<div class="card traj-card">
     <h2 style="font-size:20px;margin:0 0 4px 0">Commit trajectory · ${esc(result.modality)}/${esc(result.domain)}</h2>
     <p class="sub" style="margin:0 0 10px 0">${result.n_scored}/${result.n_commits} commits scored · p_accept across <code>.tex</code> history (oldest → newest) · click any point to drill in.</p>
-    <div class="traj-chart-wrap">
-      <svg class="traj-svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" preserveAspectRatio="xMinYMin meet">
-        ${yticks}
-        <line class="traj-thresh-svg" x1="${M.left}" y1="${threshY}" x2="${(M.left + PW).toFixed(1)}" y2="${threshY}" />
-        ${linesSvg}
-        ${emaSvg}
-        ${points}
-        ${xticks}
-      </svg>
-    </div>
-    <div class="traj-legend">
-      <span><span class="swatch sw-line"></span>p_accept</span>
-      <span><span class="swatch sw-ema"></span>EMA (α=${ALPHA})</span>
-      <span><span class="swatch" style="background:var(--accept)"></span>Accept</span>
-      <span><span class="swatch" style="background:var(--reject)"></span>Reject</span>
-      <span><span class="swatch" style="background:var(--card-bd)"></span>failed</span>
-      <span>dashed = 0.5 threshold</span>
+    <div class="traj-grid">
+      <div class="traj-chart-col">
+        <div class="traj-chart-wrap">
+          <svg class="traj-svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" preserveAspectRatio="xMinYMin meet">
+            ${yticks}
+            <line class="traj-thresh-svg" x1="${M.left}" y1="${threshY}" x2="${(M.left + PW).toFixed(1)}" y2="${threshY}" />
+            ${linesSvg}
+            ${emaSvg}
+            ${points}
+            ${xticks}
+          </svg>
+        </div>
+        <div class="traj-legend">
+          <span><span class="swatch sw-line"></span>p_accept</span>
+          <span><span class="swatch sw-ema"></span>EMA (α=${ALPHA})</span>
+          <span><span class="swatch" style="background:var(--accept)"></span>Accept</span>
+          <span><span class="swatch" style="background:var(--reject)"></span>Reject</span>
+          <span><span class="swatch" style="background:var(--card-bd)"></span>failed</span>
+          <span>dashed = 0.5 threshold</span>
+        </div>
+      </div>
+      <div class="traj-tile-wrap">
+        <div class="traj-tile-empty">click a point on the chart to preview that commit's first 10 pages</div>
+      </div>
     </div>
     <div class="commit-drilldown"></div>
     <details style="margin-top:10px"><summary>raw trajectory JSON</summary><pre>${esc(JSON.stringify(result.trajectory, null, 2))}</pre></details>
@@ -864,12 +900,31 @@ function renderTrajectory(jobId, result, mode) {
   refreshResultVisibility();
 }
 
+function updateTilePreview(jobId, rec, mode) {
+  const box = resultBox(mode);
+  const tile = box.querySelector(".traj-tile-wrap");
+  if (!tile) return;
+  if (!rec || !rec.panel_path) {
+    tile.innerHTML = `<div class="traj-tile-empty">no panel for ${esc(rec ? rec.short : '?')} (paperprep didn't emit one — older job?)</div>`;
+    return;
+  }
+  const url = `/jobs/${jobId}/file?path=${encodeURIComponent(rec.panel_path)}&commit=${encodeURIComponent(rec.short)}`;
+  tile.innerHTML = `
+    <p class="traj-tile-head">
+      <span class="sha">${esc(rec.short)}</span> &nbsp; ${esc(rec.date || "")}
+      <br>${esc((rec.subject || "").slice(0, 60))}
+    </p>
+    <img class="traj-tile-img" src="${url}" alt="panel preview ${esc(rec.short)}" />`;
+}
+
 function renderCommitDrilldown(jobId, result, idx, mode) {
   const rec = (result.trajectory || [])[idx];
   if (!rec || rec.state !== "done") return;
   const box = resultBox(mode);
   const dl = box.querySelector(".commit-drilldown");
   if (!dl) return;
+  // Swap in the right-rail panel preview for this commit.
+  updateTilePreview(jobId, rec, mode);
   const cls = rec.decision === "Accept" ? "accept" : "reject";
   dl.innerHTML = `
     <div class="card commit-drill-card">
@@ -936,10 +991,11 @@ function beginJob(historyMode, mode) {
   box.style.display = "none";
   box.innerHTML = "";
   box.dataset.wide = "";
-  refreshResultVisibility();
-  progressBox.style.display = "block";
+  // Anchor this job's progress bar to its origin tab.
+  JOB_MODE = mode || CURRENT_MODE;
   bar.style.width = "0%";
   stagesEl.style.display = historyMode ? "none" : "flex";
+  refreshResultVisibility();   // shows the progress bar on this tab only
   setBusy(true);
 }
 

@@ -13,6 +13,7 @@ dependencies = [
     "python-multipart>=0.0.9",    # required by FastAPI for file uploads
     "requests>=2.31",
     "omegaconf>=2.3",
+    "pillow>=10.0",               # 5x2 panel preview for the trajectory drilldown
 ]
 
 [project.optional-dependencies]

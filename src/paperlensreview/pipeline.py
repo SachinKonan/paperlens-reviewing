@@ -215,6 +215,19 @@ def _score_from_prepare(cfg, prepare_body: dict) -> dict:
             f"response keys={list(prepare_body.keys())}"
         )
     score = _score_via_paperlens(cfg, row)
+
+    # Build a 5x2 panel preview from the first 10 pages -- the trajectory
+    # drilldown swaps these in when you click a commit point. Best-effort,
+    # never blocks scoring (returns None if Pillow missing or page IO fails).
+    panel_path: Optional[str] = None
+    pp = prepare_body.get("output_dir")
+    if pp and row.get("images"):
+        from . import panel as _panel
+        out = _panel.build_panel([Path(p) for p in row["images"]],
+                                 Path(pp) / "panel.png")
+        if out is not None:
+            panel_path = str(out)
+
     pa = float(score["p_accept"])
     return {
         "p_accept": pa,
@@ -225,6 +238,7 @@ def _score_from_prepare(cfg, prepare_body: dict) -> dict:
         "body_pages": p0.get("body_pages"),
         "paperprep_output_dir": prepare_body.get("output_dir"),
         "paperprep_elapsed_s": prepare_body.get("elapsed_s"),
+        "panel_path": panel_path,
     }
 
 
@@ -367,6 +381,8 @@ def run_latex_history_job(cfg, status: JobStatus, work_dir: Path, repo_path: Pat
                     # to these dirs via _job_roots(commit=...).
                     "paperprep_output_dir": sc.get("paperprep_output_dir"),
                     "src_dir": str(tree),
+                    # 5x2 panel preview the trajectory's right rail swaps in.
+                    "panel_path": sc.get("panel_path"),
                 })
                 log.info(f"[{job_id}] commit {short}: {rec['decision']} p_accept={rec['p_accept']}")
             except Exception as e:
