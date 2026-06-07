@@ -8,11 +8,12 @@ the paperprep-serve HTTP boundary). Conventions match the offline batch scripts
 the commit timestamp ``%ct``.
 
 History selection (see README-prod-git-run.md / interactive UI):
-  * default window = the last N commits touching ``*.tex`` (N=20);
+  * default window = the last N commits touching ``*.tex`` (N=50);
   * per-commit churn = added+deleted lines in ``*.tex`` only;
-  * surface the mean churn (reference) and the 25th percentile (threshold);
-  * commits with churn strictly above the 25th percentile are pre-selected
-    (drops the trivial bottom-quartile), the rest stay toggleable.
+  * surface the mean churn (reference) and a tunable percentile cutoff
+    (default 50 = median) with the value at that percentile;
+  * commits with ``churn >= cutoff`` are pre-selected; the UI's slider
+    lets the user re-tune the percentile client-side without re-querying.
 """
 from __future__ import annotations
 
@@ -168,13 +169,18 @@ def _parse_numstat(out: str) -> list[dict]:
     return commits
 
 
-def last_commits_with_tex_churn(repo: Path, n: int = 20) -> dict:
+def last_commits_with_tex_churn(repo: Path, n: int = 50, pct: float = 50.0) -> dict:
     """The last ``n`` commits touching ``*.tex``, oldest->newest, with per-commit
-    ``.tex`` churn and the selection threshold.
+    ``.tex`` churn and a tunable selection threshold.
 
-    Returns ``{commits: [...], mean_churn, p25_churn, n}`` where each commit has
-    ``above_p25`` set (pre-selected when churn strictly exceeds the 25th pct;
-    if that degenerate-selects nothing, all are pre-selected).
+    ``pct`` is the percentile cutoff (default 50 = median): each commit gets
+    ``above_pct = churn >= pct_churn``. Equal-to-threshold commits are
+    included (``>=``, not strict). If every commit ends up below (degenerate),
+    pre-select all.
+
+    Returns ``{commits, mean_churn, pct, pct_churn, n}``. The UI receives this
+    object, renders a percentile slider, and recomputes the selection
+    client-side on the fly (no server round-trip per slider drag).
     """
     fmt = f"__C__%H{_SEP}%ct{_SEP}%an{_SEP}%s"
     out = _git(repo, "log", f"-{int(n)}", "--numstat", f"--format={fmt}", "--", "*.tex")
@@ -183,12 +189,13 @@ def last_commits_with_tex_churn(repo: Path, n: int = 20) -> dict:
 
     churns = [c["churn"] for c in commits]
     mean = sum(churns) / len(churns) if churns else 0.0
-    p25 = _percentile(churns, 25.0)
+    p_value = _percentile(churns, pct)
     for c in commits:
-        c["above_p25"] = c["churn"] > p25
-    if commits and not any(c["above_p25"] for c in commits):
-        # all-equal / degenerate window -> nothing strictly above; pre-select all
+        c["above_pct"] = c["churn"] >= p_value
+    if commits and not any(c["above_pct"] for c in commits):
+        # degenerate (all-zero etc.) -> nothing crossed the cutoff; pre-select all
         for c in commits:
-            c["above_p25"] = True
+            c["above_pct"] = True
 
-    return {"commits": commits, "mean_churn": mean, "p25_churn": p25, "n": len(commits)}
+    return {"commits": commits, "mean_churn": mean,
+            "pct": pct, "pct_churn": p_value, "n": len(commits)}

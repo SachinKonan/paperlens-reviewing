@@ -134,7 +134,7 @@ class SubmitLatexReq(BaseModel):
     main_tex: Optional[str] = None
     mode: str = "latest"               # "latest" (working tree) | "history"
     commits: Optional[list[dict]] = None  # selected commits for history mode
-    n_window: int = 20                 # history default window (last N .tex commits)
+    n_window: int = 50                 # history default window (last N .tex commits)
 
 
 class ListDirsReq(BaseModel):
@@ -277,7 +277,7 @@ def list_dirs(req: ListDirsReq) -> dict:
 def probe_latex(req: ProbeLatexReq) -> dict:
     """Inspect a local LaTeX dir: validate, suggest the entrypoint, list .tex
     files, and (when git-tracked) return the last-N-commit .tex churn window so
-    the UI can render the history graph + pre-select commits above the 25th pct.
+    the UI can render the history graph + pre-select commits above the cutoff.
     """
     p = Path(req.path).expanduser()
     if not p.exists():
@@ -300,7 +300,7 @@ def probe_latex(req: ProbeLatexReq) -> dict:
         info["git_toplevel"] = str(repo)
         info["dirty"] = latexsrc.working_tree_dirty(repo)
         try:
-            info["history"] = latexsrc.last_commits_with_tex_churn(repo, n=20)
+            info["history"] = latexsrc.last_commits_with_tex_churn(repo, n=50)
         except Exception as e:
             info["history"] = None
             info["history_error"] = str(e)
@@ -325,9 +325,9 @@ def submit_latex(req: SubmitLatexReq) -> dict:
         repo = latexsrc.git_toplevel(p) or p
         commits = req.commits or []
         if not commits:
-            # default selection: last-20 .tex commits above the 25th pct
+            # default selection: last-N .tex commits with churn >= the cutoff
             commits = [c for c in latexsrc.last_commits_with_tex_churn(repo, n=req.n_window)["commits"]
-                       if c.get("above_p25")]
+                       if c.get("above_pct")]
         # validate / normalize each commit sha
         norm: list[dict] = []
         for c in commits:

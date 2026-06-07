@@ -97,20 +97,29 @@ def test_is_git_repo_and_resolve(git_repo: Path, tmp_path: Path):
     assert latexsrc.resolve_commit(git_repo, "deadbeef") is None
 
 
-def test_churn_ranking_and_p25(git_repo: Path):
+def test_churn_ranking_and_pct(git_repo: Path):
+    # Default cutoff is p50 (median). For 3 commits with churns [43, 1, 101],
+    # sorted = [1, 43, 101], median = 43. churn >= 43 picks the big and the
+    # medium; the tiny (churn ~1) falls below.
     h = latexsrc.last_commits_with_tex_churn(git_repo, n=20)
     assert h["n"] == 3
+    assert h["pct"] == 50.0
     # oldest -> newest order preserved
     assert [c["subject"] for c in h["commits"]] == ["c1 big", "c2 tiny", "c3 med"]
     by_subj = {c["subject"]: c for c in h["commits"]}
-    # the tiny +1-line commit must be the smallest churn and fall below p25
     assert by_subj["c2 tiny"]["churn"] < by_subj["c1 big"]["churn"]
     assert by_subj["c2 tiny"]["churn"] < by_subj["c3 med"]["churn"]
-    assert by_subj["c2 tiny"]["above_p25"] is False
-    assert by_subj["c3 med"]["above_p25"] is True
-    # every commit carries a short sha + date + the selection threshold exists
+    assert by_subj["c2 tiny"]["above_pct"] is False
+    assert by_subj["c1 big"]["above_pct"] is True
+    assert by_subj["c3 med"]["above_pct"] is True
     assert all(len(c["short"]) == 8 for c in h["commits"])
-    assert h["p25_churn"] >= 0
+    assert h["pct_churn"] >= 0
+    # Tune the percentile -- at p100, only the single max-churn commit qualifies.
+    h2 = latexsrc.last_commits_with_tex_churn(git_repo, n=20, pct=100.0)
+    assert sum(1 for c in h2["commits"] if c["above_pct"]) == 1
+    # At p0, all commits qualify (churn >= min).
+    h3 = latexsrc.last_commits_with_tex_churn(git_repo, n=20, pct=0.0)
+    assert all(c["above_pct"] for c in h3["commits"])
 
 
 def test_archive_commit_isolated(git_repo: Path, tmp_path: Path):
@@ -175,7 +184,7 @@ def test_run_latex_history_job(git_repo: Path, tmp_path: Path):
     score_body = {"scores": [{"p_accept": 0.6, "logp_accept": -0.5, "logp_reject": -0.9}]}
 
     h = latexsrc.last_commits_with_tex_churn(git_repo, n=20)
-    selected = [c for c in h["commits"] if c["above_p25"]]   # c1 big, c3 med
+    selected = [c for c in h["commits"] if c["above_pct"]]   # c1 big, c3 med
     assert len(selected) == 2
 
     status = JobStatus(job_id="hist")
@@ -230,7 +239,7 @@ def test_run_latex_history_records_failures(git_repo: Path, tmp_path: Path):
         "elapsed_s": 0.1,
     }
     h = latexsrc.last_commits_with_tex_churn(git_repo, n=20)
-    selected = [c for c in h["commits"] if c["above_p25"]]
+    selected = [c for c in h["commits"] if c["above_pct"]]
 
     status = JobStatus(job_id="histfail")
     with patch("paperlensreview.pipeline.requests.post",

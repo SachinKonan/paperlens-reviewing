@@ -211,6 +211,15 @@
   .commit-row-labels .rl.churn  { height: 14px; }
   .commit-row-labels .rl.chk    { height: 22px; padding-top: 4px; }
   .commit-graph { display: flex; gap: 6px; align-items: flex-end; overflow-x: auto; }
+  /* Percentile slider sits between the explainer and the graph -- drag to
+     retune which commits are pre-checked (recomputed client-side). */
+  .pct-control {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    font-size: 12px; color: var(--muted); margin: 6px 0 10px 0;
+  }
+  .pct-control input[type="range"] { flex: 1; min-width: 180px; max-width: 380px; height: 4px; }
+  .pct-control b { color: var(--fg); }
+  .pct-control .pct-info code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; font-size: 11px; }
   .commit-col {
     display: flex; flex-direction: column; align-items: center;
     min-width: 56px; flex: 0 0 auto; line-height: 1.25;
@@ -371,6 +380,11 @@
         <p class="git-note" id="git-note"></p>
         <div id="commit-graph-wrap" class="commit-graph-wrap" style="display:none">
           <p class="commit-graph-explainer" id="commit-graph-explainer"></p>
+          <div class="pct-control" id="pct-control">
+            <label for="pct-slider">Pre-select commits with churn ≥ <b><span id="pct-label">50</span><sup>th</sup>-percentile</b></label>
+            <input type="range" id="pct-slider" min="0" max="100" value="50" step="1" />
+            <span class="pct-info">cutoff = <code><span id="pct-churn-val">…</span></code> lines · <b><span id="pct-selected-count">…</span></b> selected</span>
+          </div>
           <div class="commit-graph-grid">
             <div class="commit-row-labels">
               <div class="rl bar">churn (lines)</div>
@@ -382,7 +396,7 @@
             <div class="commit-graph" id="commit-graph"></div>
           </div>
           <div class="graph-legend">
-            <span>bar = .tex line churn · blue = selected (above 25th pct)</span>
+            <span>bar = .tex line churn · blue = selected (above cutoff)</span>
             <span id="sel-summary"></span>
           </div>
         </div>
@@ -1047,19 +1061,27 @@ function updateSelSummary() {
   $("sel-summary").innerHTML = `<span class="sel-count">${n}</span> selected`;
 }
 
+// Linear-interpolated percentile (matches latexsrc._percentile so server +
+// client agree on which commits land above the cutoff at a given pct).
+function jsPercentile(values, q) {
+  if (!values.length) return 0;
+  const s = [...values].sort((a, b) => a - b);
+  if (s.length === 1) return s[0];
+  const rank = (q / 100) * (s.length - 1);
+  const lo = Math.floor(rank), hi = Math.min(lo + 1, s.length - 1);
+  return s[lo] + (s[hi] - s[lo]) * (rank - lo);
+}
+
 function renderCommitGraph(h) {
-  // Explainer above the graph: spell out the jargon (mean churn / 25th pct)
-  // so the cyan "selected" coloring isn't a mystery on first view.
   const exp = $("commit-graph-explainer");
   if (exp) {
     exp.innerHTML = `
       <b>Lines edited</b> = sum of added + deleted lines in <code>*.tex</code> per commit.
       The last <b>${h.n}</b> commits that touched <code>*.tex</code> are shown
-      (oldest&nbsp;→&nbsp;newest). The dataset's <b>mean churn = ${h.mean_churn.toFixed(0)}</b>,
-      <b>25<sup>th</sup>-percentile = ${h.p25_churn.toFixed(0)}</b>. Commits with
-      churn above the 25<sup>th</sup> percentile are pre-checked (cyan bars) so
-      trivial typo commits don't pollute the trajectory — uncheck any you don't
-      want, check anything you do.
+      (oldest&nbsp;→&nbsp;newest). The mean is <b>${h.mean_churn.toFixed(0)}</b>.
+      Drag the slider below to tune the cutoff: each commit gets pre-checked
+      when its churn is <code>&gt;=</code> the chosen percentile of the churn
+      distribution. Re-check/uncheck anything by hand.
     `;
   }
   const g = $("commit-graph");
@@ -1067,20 +1089,17 @@ function renderCommitGraph(h) {
   const maxC = Math.max(1, ...h.commits.map((c) => c.churn));
   h.commits.forEach((c) => {
     const col = document.createElement("div"); col.className = "commit-col";
-    // Bar area
     const area = document.createElement("div"); area.className = "commit-bar-area";
     const barEl = document.createElement("div");
-    barEl.className = "commit-bar" + (c.above_p25 ? " sel" : "");
+    barEl.className = "commit-bar" + (c.above_pct ? " sel" : "");
     barEl.style.height = Math.max(2, Math.round(118 * c.churn / maxC)) + "px";
     barEl.title = `${c.short} · churn ${c.churn} · ${c.subject}`;
     area.appendChild(barEl);
-    // Each row of the per-commit column is its own element so the left-side
-    // labels column ("Commit / Date / Lines edited / Use?") line-aligns.
     const sha   = document.createElement("div"); sha.className   = "c-sha";   sha.textContent   = c.short;
     const date  = document.createElement("div"); date.className  = "c-date";  date.textContent  = c.date || "";
     const churn = document.createElement("div"); churn.className = "c-churn"; churn.textContent = c.churn;
     const chkBox = document.createElement("div"); chkBox.className = "c-chk";
-    const chk = document.createElement("input"); chk.type = "checkbox"; chk.checked = !!c.above_p25;
+    const chk = document.createElement("input"); chk.type = "checkbox"; chk.checked = !!c.above_pct;
     chkBox.appendChild(chk);
     const sync = () => { barEl.classList.toggle("sel", chk.checked); updateSelSummary(); };
     chk.addEventListener("change", sync);
@@ -1092,8 +1111,43 @@ function renderCommitGraph(h) {
     col.appendChild(chkBox);
     g.appendChild(col);
     c._chk = chk;
+    c._bar = barEl;
   });
+  wirePercentileSlider(h);
+  applyPercentile(h, h.pct != null ? h.pct : 50.0);
   updateSelSummary();
+}
+
+// Recompute pre-selection from a percentile + sync checkboxes/bar coloring.
+// The slider overrides any manual toggles -- moving the slider = "reset
+// selection to >= this pct"; manual toggles persist until the next drag.
+function applyPercentile(h, pct) {
+  const churns = h.commits.map((c) => c.churn);
+  const cutoff = jsPercentile(churns, pct);
+  let anyAbove = false;
+  h.commits.forEach((c) => {
+    c.above_pct = c.churn >= cutoff;
+    if (c.above_pct) anyAbove = true;
+  });
+  // Degenerate: if nothing crosses the cutoff (e.g., all zero), select all.
+  if (!anyAbove) h.commits.forEach((c) => { c.above_pct = true; });
+  h.pct = pct; h.pct_churn = cutoff;
+  h.commits.forEach((c) => {
+    if (c._chk) c._chk.checked = c.above_pct;
+    if (c._bar) c._bar.classList.toggle("sel", c.above_pct);
+  });
+  const pl = $("pct-label"); if (pl) pl.textContent = String(Math.round(pct));
+  const pc = $("pct-churn-val"); if (pc) pc.textContent = cutoff.toFixed(0);
+  updateSelSummary();
+}
+
+function wirePercentileSlider(h) {
+  const slider = $("pct-slider");
+  if (!slider) return;
+  // Seed slider position from the server's initial pct (default 50).
+  if (h.pct != null) slider.value = String(Math.round(h.pct));
+  // Replace any prior listener (re-rendering the graph re-wires).
+  slider.oninput = () => applyPercentile(h, parseFloat(slider.value));
 }
 
 async function doProbe(path) {
@@ -1122,7 +1176,7 @@ async function doProbe(path) {
       gc.style.display = "block";
       const h = PROBE.history;
       $("git-note").textContent = `git repo${PROBE.dirty ? " · working tree has uncommitted changes" : ""}`
-        + ` · window: last ${h.n} .tex commits · mean churn ${h.mean_churn.toFixed(0)}, 25th pct ${h.p25_churn.toFixed(0)}`;
+        + ` · window: last ${h.n} .tex commits · mean churn ${h.mean_churn.toFixed(0)}`;
       renderCommitGraph(h);
       document.querySelector('input[name="gitmode"][value="latest"]').checked = true;
       $("commit-graph-wrap").style.display = "none";
