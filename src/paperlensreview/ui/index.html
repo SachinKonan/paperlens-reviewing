@@ -605,6 +605,10 @@ async function renderVerdict(jobId, result, mode) {
   const box = resultBox(mode);
   box.dataset.wide = "1";
   box.style.display = "block";
+  // Preserve any in-place agent-chats container BEFORE the innerHTML rewrite
+  // wipes it. We re-append it below so the streaming transcripts stay
+  // visible alongside the final verdict card.
+  const existingChats = box.querySelector(".agent-chats");
   const cls = result.decision === "Accept" ? "accept" : "reject";
   box.innerHTML = `
     <div class="card">
@@ -651,6 +655,10 @@ async function renderVerdict(jobId, result, mode) {
     const p = box.querySelector(".pane-paperlens");
     if (p) p.innerHTML = `<div class="err">${esc(String(e))}</div>`;
   });
+  // Restore the agent transcripts we saved above so the final verdict and
+  // the agent chat panels coexist after completion. Without this they'd
+  // get nuked by the innerHTML rewrite above.
+  if (existingChats) box.appendChild(existingChats);
   refreshResultVisibility();
 }
 
@@ -1572,6 +1580,41 @@ $("submit-arxiv").addEventListener("click", async () => {
 // Probe agent CLIs once at page load so the radios reflect ground truth on
 // the server (they're disabled if `claude --version` / `codex --version` failed).
 refreshAgentProbe();
+
+// If the user reloaded mid-job, re-attach to any in-flight agent runs so the
+// streaming chat doesn't disappear. Looks for jobs whose agent_choice is
+// set and whose at-least-one variant hasn't reached a terminal state yet.
+async function resumeInflightAgentJobs() {
+  try {
+    const r = await fetch("/jobs");
+    if (!r.ok) return;
+    const jobs = await r.json();
+    // newest-first: the orchestrator's list keeps them in submission order.
+    const active = jobs.filter((j) => {
+      if (!j.agent_choice) return false;
+      const states = Object.values(j.agent_state || {});
+      // Resume only while at least one variant is still running OR the job
+      // itself is still running. Don't reattach if both variants are done.
+      const anyLive = states.some((s) => s === "queued" || s === "running");
+      return anyLive || j.state === "running";
+    });
+    if (!active.length) return;
+    // Pick the freshest one and infer its source tab from result.source_type
+    // (which the server stamps onto status.result after _write_done).
+    const j = active[active.length - 1];
+    const src = (j.result && j.result.source_type) || "pdf";
+    const mode = (src === "latex_arxiv") ? "arxiv"
+               : (src === "latex_dir" || src === "latex_history") ? "latex"
+               : "pdf";
+    // Set up the progress bar context so it shows up on the right tab.
+    JOB_MODE = mode;
+    if (Array.isArray(j.stages) && j.stages.length) STAGES = j.stages;
+    startAgentStreaming(j.job_id, mode, j.agent_choice);
+    // Also re-attach the status poll so the verdict eventually renders.
+    poll(j.job_id, mode).catch((e) => console.error("resume poll failed", e));
+  } catch (e) { /* nothing to resume */ }
+}
+resumeInflightAgentJobs();
 </script>
 </body>
 </html>
