@@ -284,6 +284,66 @@ def _browse_bookmarks() -> list[dict]:
     return out
 
 
+# --------- Try-me example assets (MAE, arXiv 2111.06377) ---------
+
+# Bundled try-me assets live at the repo root under example_assets/mae/.
+# Resolution: server.py is at <repo>/src/paperlensreview/server.py so
+# parents[2] is the repo root (parents[0]=paperlensreview, [1]=src, [2]=repo).
+# Works in both editable installs and direct-from-checkout runs.
+# arXiv mode never needs a local asset -- it fetches live by id.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_EX_DIR = _REPO_ROOT / "example_assets" / "mae"
+_EX_MAE_PDF = _EX_DIR / "mae_anonymized.pdf"
+_EX_MAE_LATEX_DIR = _EX_DIR / "latex"
+_EX_MAE_ARXIV_ID = "2111.06377"
+
+
+@app.get("/examples")
+def examples_index() -> dict:
+    """Tell the UI which try-me Run buttons should be enabled. Each entry is
+    {available: bool, label: str} so the UI can grey out missing assets on
+    hosts where the bundled paths don't exist."""
+    return {
+        "mae_pdf": {
+            "available": _EX_MAE_PDF.is_file(),
+            "label": "MAE (anonymized PDF)",
+            "size_bytes": _EX_MAE_PDF.stat().st_size if _EX_MAE_PDF.is_file() else None,
+        },
+        "mae_latex": {
+            "available": _EX_MAE_LATEX_DIR.is_dir() and any(_EX_MAE_LATEX_DIR.glob("*.tex")),
+            "label": "MAE (LaTeX source)",
+            "path": str(_EX_MAE_LATEX_DIR) if _EX_MAE_LATEX_DIR.is_dir() else None,
+        },
+        "mae_arxiv": {
+            "available": True,    # live download; the only failure mode is the network
+            "label": f"MAE (arXiv {_EX_MAE_ARXIV_ID})",
+            "arxiv_id": _EX_MAE_ARXIV_ID,
+        },
+    }
+
+
+@app.get("/examples/mae/pdf")
+def examples_mae_pdf() -> FileResponse:
+    """Serve the anonymized MAE PDF as a blob. The UI fetches this, wraps it
+    in a File, and POSTs to /submit -- same code path as a manual upload."""
+    if not _EX_MAE_PDF.is_file():
+        raise HTTPException(404, f"MAE PDF not present at {_EX_MAE_PDF}")
+    return FileResponse(_EX_MAE_PDF, media_type="application/pdf",
+                        filename="mae_anonymized.pdf")
+
+
+@app.get("/examples/mae/latex_path")
+def examples_mae_latex_path() -> dict:
+    """Return the absolute on-disk path of the bundled MAE LaTeX dir so the
+    UI can pass it straight to /submit_latex (same as if the user had
+    Browse'd to the folder). We never expose the dir's *contents* over HTTP
+    -- /submit_latex hands the path to paperprep, which reads the files
+    locally on the server."""
+    if not _EX_MAE_LATEX_DIR.is_dir():
+        raise HTTPException(404, f"MAE LaTeX dir not present at {_EX_MAE_LATEX_DIR}")
+    return {"path": str(_EX_MAE_LATEX_DIR.resolve())}
+
+
 @app.post("/list_dirs")
 def list_dirs(req: ListDirsReq) -> dict:
     """Server-side folder browser: list immediate sub-directories of ``path``.

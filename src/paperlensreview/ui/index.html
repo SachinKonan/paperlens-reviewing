@@ -300,6 +300,15 @@
   }
   .example-body a { color: var(--accent); text-decoration: none; }
   .example-body a:hover { text-decoration: underline; }
+  /* "Run this example" button -- bundled MAE asset shortcut per tab. */
+  .example-run { margin-top: 10px; display: flex; align-items: center; gap: 10px; }
+  .example-run button { padding: 6px 14px; font-size: 12px; cursor: pointer;
+                        background: var(--accept); color: #fff; border: 1px solid var(--accept);
+                        border-radius: 4px; font-weight: 600; }
+  .example-run button:hover:not(:disabled) { filter: brightness(1.08); }
+  .example-run button:disabled { background: var(--muted); border-color: var(--muted);
+                                 cursor: not-allowed; opacity: 0.7; }
+  .example-run .note { color: var(--muted); font-size: 11px; }
 
   /* ----- server-side folder browser ----- */
   .latex-row input[readonly] { background: var(--code-bg); color: var(--fg); cursor: default; }
@@ -347,9 +356,10 @@
   .agent-chat-card { border: 1px solid var(--card-bd); border-radius: 6px; background: #fafafa;
                      display: flex; flex-direction: column; max-height: 540px; }
   .agent-chat-head { padding: 8px 12px; border-bottom: 1px solid var(--card-bd);
-                     display: flex; justify-content: space-between; align-items: center;
-                     font-size: 12px; background: #fff; }
-  .agent-chat-title { font-weight: 600; }
+                     display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+                     gap: 10px; font-size: 12px; background: #fff; text-align: center; }
+  .agent-chat-title { font-weight: 600; grid-column: 2; text-align: center; }
+  .agent-chat-state { grid-column: 3; justify-self: end; }
   .agent-chat-state { font-size: 11px; padding: 2px 8px; border-radius: 10px;
                       background: var(--hover-bg); color: var(--muted); }
   .agent-chat-state.running { background: #fff3cd; color: #856404; }
@@ -450,9 +460,13 @@
     <details class="example-details">
       <summary>Try-me example: <b>MAE</b> (arXiv 2111.06377)</summary>
       <div class="example-body">
-        PaperLens was trained on anonymized inputs, so drop in a paper PDF whose authors / affiliations are blinded. To grab MAE for a quick try:
+        PaperLens was trained on anonymized inputs, so drop in a paper PDF whose authors / affiliations are blinded. The bundled example is an anonymized MAE PDF that lives at <code>example_assets/mae/mae_anonymized.pdf</code> — click <b>Run example</b> to submit it. To upload your own:
         <pre>curl -L https://arxiv.org/pdf/2111.06377 -o mae.pdf</pre>
-        Note this is the de-anonymized arXiv copy — it'll still score, but you'll get a calibrated number by passing an anonymized PDF (or use the <b>LaTeX source</b> / <b>arXiv link</b> tabs, which run paperprep's anonymization first).
+        Note that the de-anonymized arXiv copy will still score, but the bundled anonymized version is what gives you a calibrated number aligned with the paper.
+        <div class="example-run">
+          <button data-run="pdf" disabled>Run example (anonymized MAE PDF)</button>
+          <span class="note" data-run-note="pdf"></span>
+        </div>
       </div>
     </details>
   </div>
@@ -501,7 +515,12 @@
     <details class="example-details">
       <summary>Try-me example: <b>MAE</b> (arXiv 2111.06377)</summary>
       <div class="example-body">
-        Fetch the LaTeX source bundle from arXiv and extract it, then point Browse at the resulting dir:
+        The bundled MAE source tree lives at <code>example_assets/mae/latex/</code> in this repo — click <b>Run example</b> below and the server will submit it as if you'd Browse'd there.
+        <div class="example-run">
+          <button data-run="latex" disabled>Run example (bundled MAE LaTeX dir)</button>
+          <span class="note" data-run-note="latex"></span>
+        </div>
+        Or fetch the source from arXiv and Browse to it yourself:
         <pre>mkdir -p ~/mae_src
 curl -L https://arxiv.org/src/2111.06377 | tar xz -C ~/mae_src</pre>
         Click <b>Browse…</b> above, navigate to <code>~/mae_src</code>, and hit <b>✓ Use this folder</b>. paperprep anonymizes the source (authors → Anonymous, strips URLs/ack/thanks) before compile + score.
@@ -532,7 +551,12 @@ curl -L https://arxiv.org/src/2111.06377 | tar xz -C ~/mae_src</pre>
     <details class="example-details">
       <summary>Try-me example: <b>MAE</b> (arXiv 2111.06377)</summary>
       <div class="example-body">
-        Paste any of these into the box above and hit Submit:
+        Click <b>Run example</b> to fetch MAE live from arXiv (id <code>2111.06377</code>) and route it through the full pipeline.
+        <div class="example-run">
+          <button data-run="arxiv" disabled>Run example (live download of arXiv 2111.06377)</button>
+          <span class="note" data-run-note="arxiv"></span>
+        </div>
+        Or paste any of these into the box above and hit Submit:
         <pre>2111.06377
 2111.06377v3
 https://arxiv.org/abs/2111.06377</pre>
@@ -1666,6 +1690,88 @@ $("submit-arxiv").addEventListener("click", async () => {
 // Probe agent CLIs once at page load so the radios reflect ground truth on
 // the server (they're disabled if `claude --version` / `codex --version` failed).
 refreshAgentProbe();
+
+/* ---------------- Try-me Run buttons (bundled MAE assets) ---------------- */
+
+async function refreshExamplesProbe() {
+  let info = null;
+  try {
+    const r = await fetch("/examples");
+    if (r.ok) info = await r.json();
+  } catch (e) { /* leave buttons disabled */ }
+  ["pdf", "latex", "arxiv"].forEach((tab) => {
+    const btn = document.querySelector(`button[data-run="${tab}"]`);
+    const note = document.querySelector(`[data-run-note="${tab}"]`);
+    if (!btn) return;
+    const key = tab === "pdf" ? "mae_pdf" : tab === "latex" ? "mae_latex" : "mae_arxiv";
+    const entry = info && info[key];
+    if (entry && entry.available) {
+      btn.disabled = false;
+      if (note) note.textContent = entry.size_bytes
+        ? `(${(entry.size_bytes / (1024*1024)).toFixed(1)} MB)`
+        : (entry.arxiv_id ? `(id ${entry.arxiv_id})` : "");
+    } else {
+      btn.disabled = true;
+      if (note) note.textContent = "asset not found on server";
+    }
+  });
+}
+refreshExamplesProbe();
+
+// PDF: pull the bundled blob, wrap in File, drop it into the file input,
+// then trigger the normal submit handler so the agent toggle + everything
+// else just works.
+document.querySelector('button[data-run="pdf"]').addEventListener("click", async () => {
+  const btn = document.querySelector('button[data-run="pdf"]');
+  btn.disabled = true; btn.textContent = "fetching MAE PDF…";
+  try {
+    const r = await fetch("/examples/mae/pdf");
+    if (!r.ok) throw new Error(`status ${r.status}`);
+    const blob = await r.blob();
+    const file = new File([blob], "mae_anonymized.pdf", { type: "application/pdf" });
+    const dt = new DataTransfer(); dt.items.add(file);
+    $("pdf").files = dt.files;
+    $("submit").click();
+  } catch (e) {
+    meta.textContent = `couldn't fetch example: ${e}`;
+  } finally {
+    btn.disabled = false; btn.textContent = "Run example (anonymized MAE PDF)";
+  }
+});
+
+// LaTeX dir: ask the server for the bundled tree's absolute path, drop it
+// into the path field, run the same probe the Browse → Use-this-folder flow
+// uses (populates PROBE + shows the latex-detail panel + auto-fills the
+// entrypoint), then trigger /submit_latex via the existing button.
+document.querySelector('button[data-run="latex"]').addEventListener("click", async () => {
+  const btn = document.querySelector('button[data-run="latex"]');
+  btn.disabled = true; btn.textContent = "resolving bundled MAE LaTeX…";
+  try {
+    const r = await fetch("/examples/mae/latex_path");
+    if (!r.ok) throw new Error(`status ${r.status}`);
+    const data = await r.json();
+    $("latex-path").value = data.path;
+    await doProbe(data.path);
+    $("submit-latex").click();
+  } catch (e) {
+    $("latex-meta").textContent = `couldn't fetch example: ${e}`;
+  } finally {
+    btn.disabled = false; btn.textContent = "Run example (bundled MAE LaTeX dir)";
+  }
+});
+
+// arXiv: just drop the id into the input and let the existing handler do
+// the live download + paperprep + score (+ agent if toggled).
+document.querySelector('button[data-run="arxiv"]').addEventListener("click", async () => {
+  const btn = document.querySelector('button[data-run="arxiv"]');
+  btn.disabled = true; btn.textContent = "submitting arXiv 2111.06377…";
+  try {
+    $("arxiv-id").value = "2111.06377";
+    $("submit-arxiv").click();
+  } finally {
+    btn.disabled = false; btn.textContent = "Run example (live download of arXiv 2111.06377)";
+  }
+});
 
 // If the user reloaded mid-job, re-attach to any in-flight agent runs so the
 // streaming chat doesn't disappear. Looks for jobs whose agent_choice is
