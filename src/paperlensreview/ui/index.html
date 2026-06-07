@@ -248,6 +248,7 @@
   <div class="mode-toggle">
     <button class="mode-btn active" data-mode="pdf">PDF upload</button>
     <button class="mode-btn" data-mode="latex">LaTeX source dir</button>
+    <button class="mode-btn" data-mode="arxiv">arXiv link</button>
   </div>
 
   <div class="mode-pane active" id="mode-pdf">
@@ -283,6 +284,19 @@
       <div style="margin-top:14px"><button id="submit-latex">Submit</button></div>
     </div>
     <div class="meta" id="latex-meta"></div>
+  </div>
+
+  <div class="mode-pane" id="mode-arxiv">
+    <div class="latex-row">
+      <input type="text" id="arxiv-id" placeholder="arXiv id or URL  (e.g. 2305.00838 or https://arxiv.org/abs/2305.00838)" />
+      <button id="submit-arxiv">Submit</button>
+    </div>
+    <div class="latex-field">
+      <span>Entrypoint:</span>
+      <input type="text" id="arxiv-main-tex" placeholder="auto-detect (e.g. main.tex)" />
+    </div>
+    <p class="git-note">The server downloads <code>https://arxiv.org/src/&lt;id&gt;</code>, extracts it, and runs the LaTeX-dir pipeline. Append <code>v2</code>/<code>v3</code> for a specific version; bare id = latest.</p>
+    <div class="meta" id="arxiv-meta"></div>
   </div>
 
   <div class="meta" id="meta"></div>
@@ -821,6 +835,31 @@ $("submit-latex").addEventListener("click", async () => {
     await afterSubmit(resp);
   } finally {
     $("submit-latex").disabled = false;
+    setBusy(false);
+  }
+});
+
+/* ---------------- arXiv submit ---------------- */
+
+$("submit-arxiv").addEventListener("click", async () => {
+  const aid = $("arxiv-id").value.trim();
+  const am = $("arxiv-meta");
+  if (!aid) { am.textContent = "enter an arxiv id or URL"; return; }
+  const mainTex = $("arxiv-main-tex").value.trim();
+  $("submit-arxiv").disabled = true;
+  am.textContent = `fetching ${aid} …`;
+  beginJob(false);
+  try {
+    const r = await fetch("/submit_arxiv", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ arxiv_id: aid, main_tex: mainTex || null }),
+    });
+    if (!r.ok) { renderError(`submit failed: ${r.status} ${await r.text()}`); return; }
+    const resp = await r.json();
+    am.textContent = `submitted job ${resp.job_id} (arxiv ${resp.arxiv_id})`;
+    await afterSubmit(resp);
+  } finally {
+    $("submit-arxiv").disabled = false;
     setBusy(false);
   }
 });

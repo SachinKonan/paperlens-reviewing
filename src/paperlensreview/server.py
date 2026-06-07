@@ -25,6 +25,7 @@ from omegaconf import OmegaConf
 from pydantic import BaseModel
 
 from .checks import check_url_health
+from . import arxiv as _arxiv
 from . import latexsrc
 from .pipeline import (
     JobRegistry, JobStatus, STAGES,
@@ -132,6 +133,62 @@ class SubmitLatexReq(BaseModel):
 
 class ListDirsReq(BaseModel):
     path: Optional[str] = None
+
+
+class SubmitArxivReq(BaseModel):
+    arxiv_id: str                        # bare id (2305.00838) or any arxiv.org URL
+    main_tex: Optional[str] = None       # optional entrypoint hint; auto-detected if omitted
+
+
+@app.post("/submit_arxiv")
+def submit_arxiv(req: SubmitArxivReq) -> dict:
+    """Download an arxiv paper's LaTeX source, extract it, and route through the
+    normal latex_dir review path. The server (paperlensreview) does the fetch
+    so it needs internet — in slurm mode that means running on the login node,
+    not inside the GPU allocation.
+    """
+    import time as _time
+    try:
+        aid = _arxiv.normalize_id(req.arxiv_id)
+    except _arxiv.ArxivError as e:
+        raise HTTPException(400, str(e))
+
+    job_id = uuid.uuid4().hex[:12]
+    status = _state["jobs"].create(job_id)
+    log.info("[/submit_arxiv] job=%s arxiv_id=%s main_tex=%s", job_id, aid, req.main_tex)
+
+    def _runner():
+        with _state["job_lock"]:
+            job_dir = _state["work_dir"] / job_id
+            job_dir.mkdir(parents=True, exist_ok=True)
+            src_dir = job_dir / "arxiv_src"
+            gz_path = job_dir / f"{aid.replace('/', '_')}.gz"
+            status.state = "running"
+            status.started_at = _time.time()
+            status.stage = f"fetching arxiv {aid}"
+            status.stage_log.append({"t": _time.time(), "stage": status.stage, "via": "arxiv"})
+            try:
+                _arxiv.download_source(aid, gz_path)
+                if not _arxiv.extract_source(gz_path, src_dir):
+                    raise RuntimeError(f"could not extract {gz_path} (unrecognized archive shape)")
+                main_tex = req.main_tex or latexsrc.find_main_tex(src_dir)
+                # Hand off to the existing latex-dir pipeline. It will set
+                # status.state/stage and call paperprep/paperlens-serve.
+                run_latex_job(_state["cfg"], status, _state["work_dir"], src_dir, main_tex)
+                # Mark the source on the result so the UI knows it was arxiv-sourced.
+                if status.result is not None:
+                    status.result["source_type"] = "latex_arxiv"
+                    status.result["arxiv_id"] = aid
+            except Exception as e:
+                log.exception("[/submit_arxiv] job=%s failed", job_id)
+                status.state = "error"
+                status.error = f"arxiv fetch: {e}"
+                status.finished_at = _time.time()
+
+    t = threading.Thread(target=_runner, daemon=True, name=f"job-{job_id}")
+    t.start()
+    return {"job_id": job_id, "stages": STAGES, "submitted_at": status.started_at,
+            "arxiv_id": aid, "mode": "arxiv"}
 
 
 @app.post("/list_dirs")
