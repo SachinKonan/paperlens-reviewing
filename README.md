@@ -93,13 +93,18 @@ Then the verdict card slides in:
 
 ## API surface
 
-| Method | Path                  | Purpose |
-|--------|-----------------------|---------|
-| POST   | `/submit`             | Upload a PDF (multipart `file=`); returns `{job_id}` |
-| GET    | `/status/{job_id}`    | Current `state` (queued/running/done/error), current `stage`, fractional progress, and (when done) the `result` dict. UI polls this every 1.5 s. |
-| GET    | `/health`             | Service + upstream health (`paperlens_serve.url`, `paperprep_cli.detail`, stages list) |
-| GET    | `/jobs`               | All known job ids (debug) |
-| GET    | `/`                   | The HTML UI |
+| Method | Path                              | Purpose |
+|--------|-----------------------------------|---------|
+| POST   | `/submit`                         | PDF upload (multipart `file=`, optional form `agent=claude\|codex`); returns `{job_id, stages, agent}` |
+| POST   | `/submit_arxiv`                   | JSON `{arxiv_id, main_tex?, agent?}`; live-downloads source from arxiv and routes through the latex path |
+| POST   | `/submit_latex`                   | JSON `{path, main_tex?, mode: "latest"\|"history", commits?, n_window?}`; scores a server-side LaTeX dir, optionally across explicit git commits |
+| POST   | `/probe_latex`                    | JSON `{path}`; inspect a latex dir (entrypoint guess, tex files, git history with churn) — useful before `mode="history"` |
+| GET    | `/status/{job_id}`                | Current `state`, `stage`, fractional progress, `agent_state`, `agent_event_counts`, and (when done) the `result` dict. UI polls this every 1.5 s. |
+| GET    | `/jobs/{job_id}/agent_events`     | Query `variant=no_prior\|with_prior&since=N&limit=K`. Returns the next slice of agent transcript events plus terminal predictions. |
+| GET    | `/health`                         | Service + upstream health, agent CLI probe (`claude --version`, `codex --version`), stages list |
+| GET    | `/examples`                       | Which bundled try-me assets exist on this host |
+| GET    | `/jobs`                           | All known job ids (debug) |
+| GET    | `/`                               | The HTML UI |
 
 `/status/{job_id}` response shape:
 
@@ -132,6 +137,11 @@ When `state="done"`, `result` is:
   "job_dir": ".../paperlensreview_work/<job_id>"
 }
 ```
+
+_Python usage examples for these endpoints live in the umbrella PaperLens
+README (`../../README.md#python-usage-examples`) — submitting a PDF / LaTeX
+dir / arXiv id, opting into the agentic review, and scoring a custom list
+of git commits._
 
 ---
 
