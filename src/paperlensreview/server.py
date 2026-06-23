@@ -83,7 +83,15 @@ def _startup() -> None:
         cfg.paperlens_serve.base_url = env
     if (env := os.environ.get("PAPERPREP_SERVE_BASE_URL")):
         cfg.paperprep_serve.base_url = env
-    log.info("[paperlensreview] loaded config from %s", cfg_path)
+    # Modality/domain must match the loaded paperlens-serve model: a text model
+    # (template=qwen) rejects the vision sharegpt row's <image> tags, so the
+    # orchestrator sets these from the active model when it launches us.
+    if (env := os.environ.get("PAPERLENS_REVIEW_MODALITY")):
+        cfg.review.modality = env
+    if (env := os.environ.get("PAPERLENS_REVIEW_DOMAIN")):
+        cfg.review.domain = env
+    log.info("[paperlensreview] loaded config from %s (modality=%s, domain=%s)",
+             cfg_path, cfg.review.modality, cfg.review.domain)
     work_dir = Path(str(cfg.paperprep_serve.work_dir)).expanduser().resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     _state["cfg"] = cfg
