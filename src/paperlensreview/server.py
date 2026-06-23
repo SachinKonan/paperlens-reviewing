@@ -126,7 +126,8 @@ def health() -> dict:
 
 @app.post("/submit")
 def submit(file: UploadFile = File(...),
-           agent: Optional[str] = Form(None)) -> dict:
+           agent: Optional[str] = Form(None),
+           max_pages: Optional[int] = Form(None)) -> dict:
     """Accept a PDF upload, kick off the pipeline in a background thread,
     return the job_id immediately. The UI then polls /status/{job_id}.
 
@@ -135,6 +136,8 @@ def submit(file: UploadFile = File(...),
     UI's progress bar shows them from the start. Form(...) is required here
     because the UI posts multipart/form-data; without it FastAPI would treat
     ``agent`` as a query string param and silently drop the body field.
+    ``max_pages`` overrides paperprep's page cap for this job (None = server
+    default, currently 14).
     """
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "only .pdf uploads are supported")
@@ -158,7 +161,8 @@ def submit(file: UploadFile = File(...),
         # One pipeline at a time per worker process (MinerU + paperlens are
         # GPU-bound; they thrash if interleaved).
         with _state["job_lock"]:
-            run_job(_state["cfg"], status, _state["work_dir"], pdf_bytes, file.filename)
+            run_job(_state["cfg"], status, _state["work_dir"], pdf_bytes, file.filename,
+                    max_pages=max_pages)
 
     t = threading.Thread(target=_runner, daemon=True, name=f"job-{job_id}")
     t.start()
@@ -178,6 +182,7 @@ class SubmitLatexReq(BaseModel):
     mode: str = "latest"               # "latest" (working tree) | "history"
     commits: Optional[list[dict]] = None  # selected commits for history mode
     n_window: int = 50                 # history default window (last N .tex commits)
+    max_pages: Optional[int] = None    # override paperprep page cap (None = server default 14)
 
 
 class ListDirsReq(BaseModel):
@@ -188,6 +193,7 @@ class SubmitArxivReq(BaseModel):
     arxiv_id: str                        # bare id (2305.00838) or any arxiv.org URL
     main_tex: Optional[str] = None       # optional entrypoint hint; auto-detected if omitted
     agent: Optional[str] = None          # "claude" | "codex" | None (off)
+    max_pages: Optional[int] = None      # override paperprep page cap (None = server default 14)
 
 
 @app.post("/submit_arxiv")
@@ -237,7 +243,8 @@ def submit_arxiv(req: SubmitArxivReq) -> dict:
                 # Hand off to the existing latex-dir pipeline. It calls
                 # _enter_stage("paperprep") then ("paperlens_score") which
                 # resolve to indices 2 / 3 against our 4-stage list.
-                run_latex_job(_state["cfg"], status, _state["work_dir"], src_dir, main_tex)
+                run_latex_job(_state["cfg"], status, _state["work_dir"], src_dir, main_tex,
+                              max_pages=req.max_pages)
                 # Mark the source on the result so the UI knows it was arxiv-sourced.
                 if status.result is not None:
                     status.result["source_type"] = "latex_arxiv"
@@ -463,10 +470,10 @@ def submit_latex(req: SubmitLatexReq) -> dict:
         with _state["job_lock"]:
             if mode == "history":
                 run_latex_history_job(_state["cfg"], status, _state["work_dir"],
-                                      p, req.main_tex, norm)
+                                      p, req.main_tex, norm, max_pages=req.max_pages)
             else:
                 run_latex_job(_state["cfg"], status, _state["work_dir"],
-                              p, req.main_tex)
+                              p, req.main_tex, max_pages=req.max_pages)
 
     t = threading.Thread(target=_runner, daemon=True, name=f"job-{job_id}")
     t.start()

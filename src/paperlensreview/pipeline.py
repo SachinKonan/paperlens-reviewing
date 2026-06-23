@@ -133,18 +133,23 @@ def _enter_stage(status: JobStatus, stage: str, via: str = "transition") -> None
 # ---------------------------------------------------------------------------
 
 def _call_paperprep_prepare(cfg, request_id: str, *, input_type: str,
-                            path: Path, main_tex: Optional[str] = None) -> dict:
+                            path: Path, main_tex: Optional[str] = None,
+                            max_pages: Optional[int] = None) -> dict:
     """POST one paper (pdf or latex_dir) to paperprep serve /prepare.
 
     paperprep serve writes its outputs under its own output_dir (configured at
     daemon launch). The response has absolute paths to the ShareGPT exports we
     then forward to paperlens-serve. ``main_tex`` is an optional entrypoint hint
-    for latex_dir (paperprep auto-detects when omitted).
+    for latex_dir (paperprep auto-detects when omitted). ``max_pages`` overrides
+    paperprep's server-level page cap for this request (e.g. score the first 16
+    pages instead of the default 14); None falls back to the server default.
     """
     url = cfg.paperprep_serve.base_url.rstrip("/") + "/prepare"
     item = {"id": request_id, "type": input_type, "path": str(path)}
     if input_type == "latex_dir" and main_tex:
         item["main_tex"] = main_tex
+    if max_pages is not None:
+        item["max_pages"] = int(max_pages)
     payload = {"request_id": request_id, "papers": [item]}
     timeout = float(cfg.paperprep_serve.timeout_seconds)
     r = requests.post(url, json=payload, timeout=timeout)
@@ -445,9 +450,11 @@ def _run_agent_stage(status: JobStatus, job_dir: Path, *, result: dict,
     status.stage_index = status.total_stages
 
 
-def run_job(cfg, status: JobStatus, work_dir: Path, pdf_bytes: bytes, pdf_name: str) -> None:
+def run_job(cfg, status: JobStatus, work_dir: Path, pdf_bytes: bytes, pdf_name: str,
+            max_pages: Optional[int] = None) -> None:
     """End-to-end PDF job. Writes ``result.json`` on success; sets ``status.error``
-    on failure. Designed to be called inside a thread.
+    on failure. Designed to be called inside a thread. ``max_pages`` overrides
+    paperprep's page cap for this job (None = server default).
     """
     job_id = status.job_id
     job_dir = work_dir / job_id
@@ -461,8 +468,9 @@ def run_job(cfg, status: JobStatus, work_dir: Path, pdf_bytes: bytes, pdf_name: 
     status.started_at = time.time()
     _enter_stage(status, "paperprep")
     try:
-        log.info(f"[{job_id}] paperprep /prepare (pdf={pdf_path})")
-        prepare_body = _call_paperprep_prepare(cfg, job_id, input_type="pdf", path=pdf_path)
+        log.info(f"[{job_id}] paperprep /prepare (pdf={pdf_path}, max_pages={max_pages})")
+        prepare_body = _call_paperprep_prepare(cfg, job_id, input_type="pdf", path=pdf_path,
+                                               max_pages=max_pages)
         _enter_stage(status, "paperlens_score")
         sc = _score_from_prepare(cfg, prepare_body)
         result = {
@@ -486,9 +494,10 @@ def run_job(cfg, status: JobStatus, work_dir: Path, pdf_bytes: bytes, pdf_name: 
 
 
 def run_latex_job(cfg, status: JobStatus, work_dir: Path, src_path: Path,
-                  main_tex: Optional[str]) -> None:
+                  main_tex: Optional[str], max_pages: Optional[int] = None) -> None:
     """Review a LaTeX source dir as-is (working tree). Single verdict, mirrors
     the PDF flow but with type=latex_dir so paperprep compiles + anonymizes.
+    ``max_pages`` overrides paperprep's page cap (None = server default).
     """
     job_id = status.job_id
     job_dir = work_dir / job_id
@@ -498,9 +507,10 @@ def run_latex_job(cfg, status: JobStatus, work_dir: Path, src_path: Path,
     status.started_at = time.time()
     _enter_stage(status, "paperprep")
     try:
-        log.info(f"[{job_id}] paperprep /prepare (latex_dir={src_path}, main_tex={main_tex})")
+        log.info(f"[{job_id}] paperprep /prepare (latex_dir={src_path}, main_tex={main_tex}, max_pages={max_pages})")
         prepare_body = _call_paperprep_prepare(
-            cfg, job_id, input_type="latex_dir", path=src_path, main_tex=main_tex or None)
+            cfg, job_id, input_type="latex_dir", path=src_path, main_tex=main_tex or None,
+            max_pages=max_pages)
         _enter_stage(status, "paperlens_score")
         sc = _score_from_prepare(cfg, prepare_body)
         result = {
@@ -526,7 +536,8 @@ def run_latex_job(cfg, status: JobStatus, work_dir: Path, src_path: Path,
 
 
 def run_latex_history_job(cfg, status: JobStatus, work_dir: Path, repo_path: Path,
-                          main_tex: Optional[str], commits: list[dict]) -> None:
+                          main_tex: Optional[str], commits: list[dict],
+                          max_pages: Optional[int] = None) -> None:
     """Score a paper across selected git commits -> a p_accept trajectory.
 
     Each commit is git-archived into ``<job_dir>/src/<short>``, prepped + scored.
@@ -566,7 +577,7 @@ def run_latex_history_job(cfg, status: JobStatus, work_dir: Path, repo_path: Pat
                 latexsrc.archive_commit(repo, sha, tree)
                 body = _call_paperprep_prepare(
                     cfg, f"{job_id}_{short}", input_type="latex_dir",
-                    path=tree, main_tex=main_tex or None)
+                    path=tree, main_tex=main_tex or None, max_pages=max_pages)
                 sc = _score_from_prepare(cfg, body)
                 rec.update({
                     "state": "done",
