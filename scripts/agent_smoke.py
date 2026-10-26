@@ -2,13 +2,15 @@
 and run claude on one + codex on the other in parallel, streaming events
 to stdout so we can confirm the end-to-end pipeline before wiring the UI.
 
-Run with the paperlens-reviewing venv's python:
-    /scratch/gpfs/ZHUANGL/sk7524/PaperLens/tools/paperlens-reviewing/.venv/bin/python \
-        scripts/agent_smoke.py
+Run with the paperscorer-reviewing venv's python, pointing PAPERPREP_OUT at
+one paperprep-serve request dir:
+    PAPERPREP_OUT=/path/to/paperprep_work/<request_id> \
+        .venv/bin/python scripts/agent_smoke.py
 """
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 import time
@@ -19,9 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from paperlensreview import agents
 
 
-PAPERPREP_OUT = Path(
-    "/scratch/gpfs/ZHUANGL/sk7524/PaperLens/.paperlens_runs/serve_5qcbv0ns/paperprep_work/258578a99b47_376ca88e"
-)
+# One paperprep-serve output dir (e.g. <output_dir>/paperprep_work/<request_id>).
+PAPERPREP_OUT = Path(os.environ.get("PAPERPREP_OUT", "paperprep_work/REQUEST_ID"))
 SMOKE_ROOT = Path("/tmp/paperlens_agent_smoke")
 SID = "smoketest"
 TITLE = "smoke test paper"

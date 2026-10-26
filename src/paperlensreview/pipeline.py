@@ -545,7 +545,7 @@ def run_latex_history_job(cfg, status: JobStatus, work_dir: Path, repo_path: Pat
     export) are KEPT so the UI's drilldown panel can render that commit's
     Files browser and the exact sharegpt row PaperLens scored on. Inode cost:
     K commits x a few hundred MinerU crops each -- run ``checkquota`` if you
-    chain very long histories (the ZHUANGL group is at ~175M cap).
+    chain very long histories (shared filesystems often cap inode counts).
 
     Per-commit failures are recorded in the trajectory and not fatal.
     """

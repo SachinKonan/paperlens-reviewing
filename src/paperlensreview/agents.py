@@ -380,7 +380,7 @@ def build_workspace(*, dest: Path, paperprep_output_dir: Path,
     """Lay out one workspace on disk and return a manifest describing what's in it.
 
     Symlinks the page images and panel from the paperprep output dir to avoid
-    re-encoding (ZHUANGL inode budget is tight; this keeps each workspace at
+    re-encoding (shared-filesystem inode budgets are tight; this keeps each workspace at
     ~handful of inodes regardless of page count).
     """
     dest.mkdir(parents=True, exist_ok=True)

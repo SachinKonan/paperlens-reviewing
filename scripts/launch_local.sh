@@ -2,9 +2,9 @@
 # launch_local.sh — bring up the full reviewing stack on the local host.
 #
 #   1. Verify nvidia-smi finds a CUDA GPU.
-#   2. Launch `paperprep serve` (PaperLens/paperprep, persistent MinerU vLLM)
+#   2. Launch `paperprep serve` (../../paperprep, persistent MinerU vLLM)
 #      in background and wait for its /healthz.
-#   3. Launch `paperlens serve` (paperlens-training-and-inference) in background
+#   3. Launch `paperlens serve` (paperscorer-training-and-inference) in background
 #      and wait for its /health.
 #   4. Launch `paperlensreview serve` in foreground; print its URL.
 #
@@ -19,8 +19,8 @@
 # add to <1.0 or you'll OOM. Override with PAPERPREP_GPU_MEM_UTIL.
 #
 # Env / overrides:
-#   PAPERLENS_SERVE_CONFIG          path to paperlens-training-and-inference/configs/serve.yaml
-#   PAPERLENSREVIEW_CONFIG          path to paperlens-reviewing/configs/server.yaml
+#   PAPERLENS_SERVE_CONFIG          path to paperscorer-training-and-inference/configs/serve.yaml
+#   PAPERLENSREVIEW_CONFIG          path to tools/paperscorer-reviewing/configs/server.yaml
 #   PAPERPREP_SERVE_OUTPUT_DIR      where paperprep serve writes per-request subdirs
 #   PAPERLENS_SERVE_PORT            default 8002
 #   PAPERLENSREVIEW_PORT            default 8003
@@ -82,12 +82,12 @@ PAPERPREP_SERVE_PORT="$(_pick_free_port "$PAPERPREP_SERVE_PORT")"
 export PAPERLENS_SERVE_BASE_URL="http://127.0.0.1:${PAPERLENS_SERVE_PORT}"
 export PAPERPREP_SERVE_BASE_URL="http://127.0.0.1:${PAPERPREP_SERVE_PORT}"
 
-# Best-effort discovery of paperlens-training-and-inference.
+# Best-effort discovery of paperscorer-training-and-inference.
 if [[ -z "${PAPERLENS_SERVE_CONFIG:-}" ]]; then
     for candidate in \
+        "$REVIEW_ROOT/../../paperscorer-training-and-inference/configs/serve.yaml" \
         "$REVIEW_ROOT/../../paperlens-training-and-inference/configs/serve.yaml" \
-        "$REVIEW_ROOT/../paperlens-training-and-inference/configs/serve.yaml" \
-        "/scratch/gpfs/ZHUANGL/sk7524/paperlens-training-and-inference/configs/serve.yaml"
+        "$REVIEW_ROOT/../paperlens-training-and-inference/configs/serve.yaml"
     do
         if [[ -f "$candidate" ]]; then PAPERLENS_SERVE_CONFIG="$candidate"; break; fi
     done
@@ -101,7 +101,7 @@ PAPERLENSREVIEW_CONFIG="${PAPERLENSREVIEW_CONFIG:-$REVIEW_ROOT/configs/server.ya
 # Best-effort discovery of paperprep root.
 if [[ -z "${PAPERPREP_ROOT:-}" ]]; then
     for candidate in \
-        "/scratch/gpfs/ZHUANGL/sk7524/PaperLens/paperprep" \
+        "$REVIEW_ROOT/../../paperprep" \
         "$REVIEW_ROOT/../../PaperLens/paperprep" \
         "$REVIEW_ROOT/../paperprep"
     do
@@ -112,8 +112,8 @@ if [[ -z "${PAPERPREP_ROOT:-}" ]]; then
 fi
 if [[ -z "${PAPERPREP_ROOT:-}" || ! -d "$PAPERPREP_ROOT/src/paper_anonymizer/paperprep" ]]; then
     echo "ERROR: PAPERPREP_ROOT not set and paperprep submodule not found." >&2
-    echo "Clone https://github.com/SachinKonan/AutoReviewer (paperprep-only branch)" >&2
-    echo "or set PAPERPREP_ROOT=<repo root>." >&2
+    echo "paperprep ships in https://github.com/zlab-princeton/PaperScorer (paperprep/);" >&2
+    echo "clone that repo or set PAPERPREP_ROOT=<paperprep dir>." >&2
     exit 2
 fi
 
@@ -203,7 +203,7 @@ PAPERLENS_VENV="${PAPERLENS_TRAIN_AND_INFER_VENV:-}"
 # imports peft + vllm + transformers; the system python3.9 doesn't have these.
 if [[ -z "$PAPERLENS_VENV" ]]; then
     for candidate in \
-        "/scratch/gpfs/ZHUANGL/sk7524/LLaMA-Factory-AutoReviewer/.venv" \
+        "$REVIEW_ROOT/../../paperscorer-training-and-inference/.venv" \
         "${VIRTUAL_ENV:-}"
     do
         if [[ -n "$candidate" && -x "$candidate/bin/python" ]]; then
@@ -221,9 +221,9 @@ PAPERLENS_TRAIN_AND_INFER_ROOT="${PAPERLENS_TRAIN_AND_INFER_ROOT:-}"
 if [[ -z "$PAPERLENS_TRAIN_AND_INFER_ROOT" ]]; then
     for candidate in \
         "$(dirname "$PAPERLENS_SERVE_CONFIG")/.." \
+        "$REVIEW_ROOT/../../paperscorer-training-and-inference" \
         "$REVIEW_ROOT/../../paperlens-training-and-inference" \
-        "$REVIEW_ROOT/../paperlens-training-and-inference" \
-        "/scratch/gpfs/ZHUANGL/sk7524/paperlens-training-and-inference"
+        "$REVIEW_ROOT/../paperlens-training-and-inference"
     do
         if [[ -d "$candidate/src/paperlens_cli" ]]; then
             PAPERLENS_TRAIN_AND_INFER_ROOT="$(cd "$candidate" && pwd)"; break
@@ -278,7 +278,7 @@ REVIEW_VENV="${PAPERLENSREVIEW_VENV:-}"
 # Auto-discover: prefer the explicit env, then $VIRTUAL_ENV (set by step 3),
 # then the canonical LF venv.
 if [[ -z "$REVIEW_VENV" ]]; then
-    for candidate in "${VIRTUAL_ENV:-}" "/scratch/gpfs/ZHUANGL/sk7524/LLaMA-Factory-AutoReviewer/.venv"; do
+    for candidate in "${VIRTUAL_ENV:-}" "$REVIEW_ROOT/../../paperscorer-training-and-inference/.venv"; do
         if [[ -n "$candidate" && -x "$candidate/bin/python" ]]; then
             REVIEW_VENV="$candidate"; break
         fi
@@ -309,7 +309,7 @@ fi
 URL="http://$(hostname):${PAPERLENSREVIEW_PORT}"
 echo ""
 echo "================================================================"
-echo "  🌐 PaperLens reviewing UI ready at:"
+echo "  🌐 PaperScorer reviewing UI ready at:"
 echo "     $URL"
 echo "================================================================"
 echo ""

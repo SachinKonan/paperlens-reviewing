@@ -61,7 +61,7 @@ def normalize_id(raw: str) -> str:
 def download_source(arxiv_id: str, dest: Path, *,
                     timeout: int = 60,
                     max_attempts: int = 5,
-                    user_agent: str = "paperlens-reviewing/0.1 (mailto:sachinkonan480@gmail.com)") -> Path:
+                    user_agent: str = "paperscorer/0.1 (+https://github.com/zlab-princeton/PaperScorer)") -> Path:
     """Stream ``https://arxiv.org/src/<arxiv_id>`` to ``dest`` atomically.
 
     Retries up to ``max_attempts`` times with exponential backoff (2,4,8,16,32s).

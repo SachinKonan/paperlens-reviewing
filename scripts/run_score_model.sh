@@ -11,7 +11,8 @@
 set -uo pipefail
 MODEL_LINES="${MODEL_LINES:?set MODEL_LINES=comma,sep,linenums}"
 
-ROOT=/scratch/gpfs/ZHUANGL/sk7524
+# Workspace root that holds the checkouts and venvs named below; set PAPERSCORER_ROOT.
+ROOT="${PAPERSCORER_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}"
 WT_VENV=$ROOT/paperlens-training-and-inference/.venv
 LF_VENV=$ROOT/LLaMA-Factory-AutoReviewer/.venv
 REVIEW=$ROOT/tools/paperlens-reviewing

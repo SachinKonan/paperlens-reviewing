@@ -7,7 +7,7 @@ the paperprep-serve HTTP boundary). Conventions match the offline batch scripts
 (never touching the working tree), short shas are ``sha[:8]``, dates come from
 the commit timestamp ``%ct``.
 
-History selection (see README-prod-git-run.md / interactive UI):
+History selection (see the interactive UI):
   * default window = the last N commits touching ``*.tex`` (N=50);
   * per-commit churn = added+deleted lines in ``*.tex`` only;
   * surface the mean churn (reference) and a tunable percentile cutoff

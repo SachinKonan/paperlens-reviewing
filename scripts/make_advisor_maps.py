@@ -21,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -36,7 +37,9 @@ GRID = ROOT / "logs" / "grid"
 SCORES = GRID / "scores"
 CACHE = GRID / "prepped"
 OUT = GRID / "maps"; OUT.mkdir(parents=True, exist_ok=True)
-LF = Path("/scratch/gpfs/ZHUANGL/sk7524/LLaMA-Factory-AutoReviewer")
+# Training repo holding the reconstructed data/<key>/data.json files.
+LF = Path(os.environ.get("PAPERSCORER_TRAIN_ROOT",
+                         ROOT.parent.parent / "paperscorer-training-and-inference"))
 
 # 4 models, y-axis order
 MODELS = [

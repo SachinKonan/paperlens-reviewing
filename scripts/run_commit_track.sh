@@ -15,7 +15,8 @@ set -uo pipefail
 SLICE_INDEX="${SLICE_INDEX:-0}"
 NUM_SLICES="${NUM_SLICES:-1}"
 
-ROOT=/scratch/gpfs/ZHUANGL/sk7524
+# Workspace root that holds the checkouts and venvs named below; set PAPERSCORER_ROOT.
+ROOT="${PAPERSCORER_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}"
 LF_VENV=$ROOT/LLaMA-Factory-AutoReviewer/.venv
 WT_VENV=$ROOT/paperlens-training-and-inference/.venv
 PP_ROOT=$ROOT/PaperLens/paperprep

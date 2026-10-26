@@ -1,10 +1,10 @@
-# paperlens-reviewing
+# paperscorer-reviewing
 
 A small FastAPI service + browser UI that **reviews one paper end-to-end**: drop
 in a PDF, watch a progress bar walk through the pipeline, get back a verdict
 (Accept / Reject) and the model's `p_accept` confidence.
 
-It glues together the rest of the PaperLens ecosystem:
+It glues together the other PaperScorer components:
 
 ```
 [ PDF upload ]
@@ -19,18 +19,18 @@ It glues together the rest of the PaperLens ecosystem:
 [ verdict + p_accept → browser UI ]
 ```
 
-Sibling repos referenced:
+Sibling directories in the [PaperScorer repo](https://github.com/zlab-princeton/PaperScorer):
 
-- [`paperprep`](https://github.com/SachinKonan/AutoReviewer/tree/paperprep-only) — paper → ShareGPT pipeline
-- [`paperlens-training-and-inference`](https://github.com/SachinKonan/LLaMA-Factory-AutoReviewer/tree/published-branch) — provides `paperlens serve`
-- [`paperlens-arxiv-server`](https://github.com/SachinKonan/paperlens-arxiv-server) — different deployment (arxiv retriever stack)
+- [`paperprep`](../../paperprep): paper → ShareGPT pipeline
+- [`paperscorer-training-and-inference`](../../paperscorer-training-and-inference): provides `paperlens serve`
+- [`tools/paperscorer-arxiv-server`](../paperscorer-arxiv-server): a different deployment (arXiv retriever stack)
 
 ---
 
 ## Layout
 
 ```
-paperlens-reviewing/
+paperscorer-reviewing/
 ├── pyproject.toml                       console_script: paperlensreview = …
 ├── README.md
 ├── scripts/launch_local.sh              GPU check → paperlens serve → paperlensreview → URL
@@ -49,15 +49,18 @@ paperlens-reviewing/
 ## Install
 
 ```bash
-# 1) Install paperprep first (paperlens-reviewing shells out to it):
-git clone -b paperprep-only https://github.com/SachinKonan/AutoReviewer.git paperprep
-cd paperprep && uv sync --extra gpu && cd ..
+# All components ship in one repo:
+git clone https://github.com/zlab-princeton/PaperScorer.git
+cd PaperScorer
 
-# 2) Bring up paperlens serve via paperlens-training-and-inference (separate repo):
-#    See https://github.com/SachinKonan/LLaMA-Factory-AutoReviewer/tree/published-branch
+# 1) Install paperprep first (this server shells out to it):
+cd paperprep && uv sync --extra gpu --extra serve && cd ..
+
+# 2) Set up paperlens serve from paperscorer-training-and-inference:
+#    see paperscorer-training-and-inference/README.md
 
 # 3) Install this server:
-cd paperlens-reviewing
+cd tools/paperscorer-reviewing
 uv venv .venv && source .venv/bin/activate
 uv pip install -e .
 ```
@@ -71,7 +74,7 @@ the reviewing server:
 
 ```bash
 bash scripts/launch_local.sh
-# →  🌐 PaperLens reviewing UI ready at:  http://<host>:8003
+# →  🌐 PaperScorer reviewing UI ready at:  http://<host>:8003
 ```
 
 Open `http://<host>:8003` in a browser, drop a PDF, and watch the stages light up:
@@ -138,8 +141,8 @@ When `state="done"`, `result` is:
 }
 ```
 
-_Python usage examples for these endpoints live in the umbrella PaperLens
-README (`../../README.md#python-usage-examples`) — submitting a PDF / LaTeX
+_Python usage examples for these endpoints live in the top-level PaperScorer
+[README](../../README.md#python-usage-examples): submitting a PDF / LaTeX
 dir / arXiv id, opting into the agentic review, and scoring a custom list
 of git commits._
 

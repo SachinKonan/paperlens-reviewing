@@ -13,7 +13,8 @@
 set -euo pipefail
 
 # ---- paths ---------------------------------------------------------------
-ROOT=/scratch/gpfs/ZHUANGL/sk7524
+# Workspace root that holds the checkouts and venvs named below; set PAPERSCORER_ROOT.
+ROOT="${PAPERSCORER_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}"
 LF_VENV=$ROOT/LLaMA-Factory-AutoReviewer/.venv
 WT_VENV=$ROOT/paperlens-training-and-inference/.venv
 WT_ROOT=$ROOT/paperlens-training-and-inference

@@ -12,11 +12,13 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
 
-REPO = Path("/scratch/gpfs/ZHUANGL/sk7524/PaperLensArXivRelease")
+# Git repo of the paper's LaTeX source whose history is scored.
+REPO = Path(os.environ.get("PAPER_REPO", "."))
 CAP_SHA = "4af324c"   # cap the history at: Add "Where does this signal lie?" section
 
 import matplotlib as mpl
